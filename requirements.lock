@@ -1,0 +1,6 @@
+# Exact versions, including transitive dependencies; Python 3.12–3.14.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
+cffi==2.1.1
+pycparser==3.0
+PyYAML==6.0.3

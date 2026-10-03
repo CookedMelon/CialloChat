@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "mode": "local",
+  "hostname": "localhost",
+  "bind_address": "0.0.0.0",
+  "rtmp_port": 1935,
+  "rtmps_port": 1936,
+  "rtsp_port": 8554,
+  "api_port": 9997,
+  "certificate": "certs/server.crt",
+  "private_key": "certs/server.key"
+}

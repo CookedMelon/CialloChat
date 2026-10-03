@@ -1,0 +1,8 @@
+此文件是 server.crt 的格式占位说明，不是有效证书。
+实际内容是一个或多个 PEM 证书块：
+-----BEGIN CERTIFICATE-----
+<证书机构签发的 Base64 服务器证书>
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+<Base64 中间证书；有多个时按链顺序附加>
+-----END CERTIFICATE-----

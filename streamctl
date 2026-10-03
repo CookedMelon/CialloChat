@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  echo 'CialloChat: 请先运行 ./setup.sh 初始化系统 Python 虚拟环境。' >&2
+  exit 1
+fi
+exec "$ROOT/.venv/bin/python" -m streamctl.cli "$@"

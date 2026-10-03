@@ -1,0 +1,6 @@
+services:
+  mediamtx:
+    ports: !override
+      - "127.0.0.1:${CIALLOCHAT_RTMP_PORT:-1935}:1935/tcp"
+      - "127.0.0.1:${CIALLOCHAT_RTSP_PORT:-8554}:8554/tcp"
+      - "127.0.0.1:${CIALLOCHAT_API_PORT:-9997}:9997/tcp"

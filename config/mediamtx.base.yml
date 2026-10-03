@@ -1,0 +1,25 @@
+# MediaMTX v1.21.1; generated configuration adds accounts, paths and mode.
+logLevel: info
+logDestinations: [stdout]
+authMethod: internal
+api: true
+apiAddress: :9997
+metrics: false
+pprof: false
+playback: false
+rtsp: true
+rtspAddress: :8554
+rtspTransports: [tcp]
+rtspAuthMethods: [basic]
+rtmp: true
+rtmpAddress: :1935
+rtmpsAddress: :1936
+hls: false
+webrtc: false
+srt: false
+moq: false
+pathDefaults:
+  source: publisher
+  overridePublisher: false
+  record: false
+  alwaysAvailable: false

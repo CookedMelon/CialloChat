@@ -1,0 +1,13 @@
+{
+  "result": "passed",
+  "os": "Ubuntu 24.04.5 LTS",
+  "python": "3.12.3",
+  "architecture": "x86_64",
+  "checks": [
+    "locked dependency installation",
+    "management and CLI tests as uid 1000",
+    "Bash syntax",
+    "Python compilation"
+  ],
+  "scope": "Auxiliary Ubuntu 24.04 container; not native setup/systemd/host reboot acceptance"
+}

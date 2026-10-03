@@ -1,0 +1,14 @@
+{
+  "schema": 2,
+  "users": [
+    {
+      "username": "alice",
+      "publish_key_hash": "argon2:<独立推流密钥的Argon2id哈希，由streamctl生成>",
+      "read_key_hash": "argon2:<独立观看密钥的Argon2id哈希，由streamctl生成>",
+      "stream_path": "live/alice",
+      "enabled": true,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

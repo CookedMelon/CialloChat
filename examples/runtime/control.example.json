@@ -1,0 +1,5 @@
+{
+  "username": "ciallochat-control",
+  "password": "<初始化时独立随机生成的管理密钥>",
+  "password_hash": "argon2:<上述管理密钥的Argon2id哈希>"
+}

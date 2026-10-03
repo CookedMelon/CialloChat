@@ -1,0 +1,258 @@
+{
+  "version": {
+    "mediamtx": "1.21.1",
+    "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+    "linux_amd64_archive_sha256": "653abc672a3e693f8d3b2717752492fdcfb8072291ec108d03d3dd857411b0ee",
+    "schema": 1
+  },
+  "backend": "compose",
+  "started_at": "2026-10-03T02:11:51Z",
+  "tests": [
+    {
+      "name": "startup and config load",
+      "status": "passed",
+      "seconds": 1.07
+    },
+    {
+      "name": "actual container image, ports, UID, mounts and logging",
+      "status": "passed",
+      "seconds": 0.11
+    },
+    {
+      "name": "anonymous rejected",
+      "status": "passed",
+      "seconds": 1.41
+    },
+    {
+      "name": "wrong password rejected",
+      "status": "passed",
+      "seconds": 4.17
+    },
+    {
+      "name": "unknown path rejected",
+      "status": "passed",
+      "seconds": 0.51
+    },
+    {
+      "name": "cross-path rejected",
+      "status": "passed",
+      "seconds": 3.82
+    },
+    {
+      "name": "two publishers ready",
+      "status": "passed",
+      "seconds": 1.96
+    },
+    {
+      "name": "publisher cannot access management API",
+      "status": "passed",
+      "seconds": 0.7
+    },
+    {
+      "name": "anonymous read denied",
+      "status": "passed",
+      "seconds": 0.05
+    },
+    {
+      "name": "wrong watch key denied",
+      "status": "passed",
+      "seconds": 2.42
+    },
+    {
+      "name": "username alone denied",
+      "status": "passed",
+      "seconds": 0.32
+    },
+    {
+      "name": "publish key cannot read",
+      "status": "passed",
+      "seconds": 1.43
+    },
+    {
+      "name": "publish key cannot authenticate viewer",
+      "status": "passed",
+      "seconds": 3.7
+    },
+    {
+      "name": "Bob viewer cannot read Alice",
+      "status": "passed",
+      "seconds": 3.05
+    },
+    {
+      "name": "watch key cannot publish",
+      "status": "passed",
+      "seconds": 3.21
+    },
+    {
+      "name": "viewer identity cannot publish",
+      "status": "passed",
+      "seconds": 3.05
+    },
+    {
+      "name": "viewer cannot access management API",
+      "status": "passed",
+      "seconds": 1.62
+    },
+    {
+      "name": "watch reset disconnects readers, old denied, new decoded, publisher preserved",
+      "status": "passed",
+      "seconds": 9.3
+    },
+    {
+      "name": "two concurrent readers decode H264 AAC",
+      "status": "passed",
+      "seconds": 9.0
+    },
+    {
+      "name": "Bob distinct video and audio decode",
+      "status": "passed",
+      "seconds": 7.1
+    },
+    {
+      "name": "second publisher rejected, original preserved",
+      "status": "passed",
+      "seconds": 2.24
+    },
+    {
+      "name": "cross-path rejected, Bob preserved",
+      "status": "passed",
+      "seconds": 2.73
+    },
+    {
+      "name": "disable terminates existing connection and denies reconnect",
+      "status": "passed",
+      "seconds": 5.44
+    },
+    {
+      "name": "enable permits new publish",
+      "status": "passed",
+      "seconds": 2.78
+    },
+    {
+      "name": "reset terminates old connection, old denied, new decoded",
+      "status": "passed",
+      "seconds": 12.69
+    },
+    {
+      "name": "restart preserves accounts and accepts publish",
+      "status": "passed",
+      "seconds": 10.46
+    },
+    {
+      "name": "production TLS validated and plaintext closed",
+      "status": "passed",
+      "seconds": 2.14
+    },
+    {
+      "name": "wrong TLS trust and hostname rejected",
+      "status": "passed",
+      "seconds": 0.03
+    },
+    {
+      "name": "untrusted actual RTMPS publisher rejected",
+      "status": "passed",
+      "seconds": 0.38
+    },
+    {
+      "name": "trusted RTMPS publish with RTSP audio video decode",
+      "status": "passed",
+      "seconds": 8.84
+    },
+    {
+      "name": "RTMPS credential reset revokes live connection",
+      "status": "passed",
+      "seconds": 7.34
+    },
+    {
+      "name": "missing renewal file does not block revocation, startup still denied",
+      "status": "passed",
+      "seconds": 14.92
+    },
+    {
+      "name": "certificate update verified on TLS socket and media reconnected",
+      "status": "passed",
+      "seconds": 10.35
+    },
+    {
+      "name": "production backup restore preserves credentials and playable media",
+      "status": "passed",
+      "seconds": 12.0
+    },
+    {
+      "name": "delete terminates live publisher and rejects reconnect",
+      "status": "passed",
+      "seconds": 2.14
+    }
+  ],
+  "deployment": [
+    {
+      "mode": "local",
+      "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+      "user": "0:0",
+      "ports": {
+        "1935/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "37193"
+          }
+        ],
+        "8554/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "56423"
+          }
+        ],
+        "9997/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "48987"
+          }
+        ]
+      },
+      "restart": "unless-stopped",
+      "read_only_config_and_certificates": true,
+      "logging": {
+        "Type": "json-file",
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      }
+    },
+    {
+      "mode": "production",
+      "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+      "user": "0:0",
+      "ports": {
+        "1936/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55007"
+          }
+        ],
+        "8554/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "56423"
+          }
+        ],
+        "9997/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "48987"
+          }
+        ]
+      },
+      "restart": "unless-stopped",
+      "read_only_config_and_certificates": true,
+      "logging": {
+        "Type": "json-file",
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      }
+    }
+  ],
+  "result": "passed"
+}

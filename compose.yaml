@@ -1,0 +1,22 @@
+name: ciallochat
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40
+    command: ["/config/mediamtx.yml"]
+    user: "${CIALLOCHAT_UID:?Run with streamctl}:${CIALLOCHAT_GID:?Run with streamctl}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/mediamtx:/config:ro"
+      - "${CIALLOCHAT_CERT_DIR:?Run with streamctl}:/certs:ro"
+    ports:
+      - "${CIALLOCHAT_BIND:-0.0.0.0}:${CIALLOCHAT_RTMPS_PORT:-1936}:1936/tcp"
+      - "${CIALLOCHAT_BIND:-0.0.0.0}:${CIALLOCHAT_RTSP_PORT:-8554}:8554/tcp"
+      - "127.0.0.1:${CIALLOCHAT_API_PORT:-9997}:9997/tcp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
