@@ -77,3 +77,33 @@ chmod 600 runtime/settings.json runtime/certs/server.crt runtime/certs/server.ke
 单条直播出口带宽约等于码率 × 同时读者数，再预留协议开销；第一版无转码、流量额度、录制、HLS 或 WebRTC，不承诺公网延迟。
 
 依据：[Docker Ubuntu 安装](https://docs.docker.com/engine/install/ubuntu/)、[Compose 合并规则](https://docs.docker.com/reference/compose-file/merge/)、[MediaMTX 1.21.1](https://github.com/bluenviron/mediamtx/releases/tag/v1.21.1)。
+
+## 公网 IP 证书与自动续期
+
+只有公网 IP 时，可以使用支持 IP SAN 的受信任证书。Let’s Encrypt 已提供 IP 证书，Certbot 5.4 支持相关工作流；IP 证书有效期较短，需要自动续期。[官方说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)
+
+在独立的 Certbot 环境中申请证书，不改动项目锁定的 Python 依赖。初次签发并复制完整链和私钥后，以该 IP 为 settings.json 的 hostname，启动 production；standalone 验证需要公网 TCP 80 可访问。推流使用 1936，观看使用 8554，管理 API 的 9997 保持回环。
+
+可以将下面的命令用于 Certbot 的 systemd 定时任务，路径按实际安装调整：
+
+```bash
+/opt/ciallochat-certbot/bin/certbot renew --quiet \
+  --deploy-hook '/opt/ciallochat/scripts/certbot-deploy.sh /opt/ciallochat'
+```
+
+定时任务建议每 12 小时检查一次。Certbot 通过 RENEWED_LINEAGE 传入成功续期的证书目录；钩子先在临时目录验证完整链、主机名与私钥，保存权限 600 的旧证书备份，原子替换 runtime 文件，再重启并确认实际服务证书。失败时恢复原文件。证书更新会短暂断开直播，客户端需要重连。
+
+可以执行 `certbot renew --dry-run` 验证续期挑战。不要直接把 staging 的不受信任证书复制到正式 runtime；钩子会拒绝无有效公共信任链的证书。
+
+## 镜像离线导入
+
+当服务器无法访问 Docker Hub 时，可在有网络的可信环境导出固定镜像，再经 SCP 传输并校验文件 SHA256：
+
+```bash
+docker image save bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40 | gzip > mediamtx.tar.gz
+sha256sum mediamtx.tar.gz
+# 在目标服务器：
+docker image load -i mediamtx.tar.gz
+```
+
+Docker 29 的 OCI 导出按 digest 导入时可能只建立 image ID；可将已验证的该 ID 标为 bluenviron/mediamtx:1.21.1，再用完整 `tag@sha256:...` 执行 inspect，确认 RepoDigests 与版本锁一致。setup 复用已存在的完整锁定 digest，不凭可变标签跳过版本核对。Compose 配置继续使用原锁定 digest。

@@ -98,7 +98,11 @@ STAGE=initialization
 ./streamctl init --mode "$MODE"
 STAGE=image
 image="$(.venv/bin/python -c 'import json; print(json.load(open("config/version.json"))["image"])')"
-docker pull "$image"
+if docker image inspect "$image" >/dev/null 2>&1; then
+  printf '已存在锁定 digest 的媒体镜像，复用: %s\n' "$image"
+else
+  docker pull "$image"
+fi
 STAGE=configuration
 ./streamctl apply
 ./streamctl config-check
