@@ -69,6 +69,8 @@ def parser():
     r = sub.add_parser('restore'); r.add_argument('file'); r.add_argument('--migrate-credentials-file')
     d = sub.add_parser('doctor'); d.add_argument('--with-validation', action='store_true')
     sub.add_parser('certificate-reload')
+    limits = sub.add_parser('limits')
+    limits.add_argument('--publish-kbps', type=int, help='每路推流最大平均 Kbps，运行中可调整')
     return p
 
 
@@ -208,6 +210,14 @@ def execute(args):
                 print_credentials(settings, args.username, read_key=value)
             else:
                 print('账号操作已完成。')
+        elif args.command == 'limits':
+            if args.publish_kbps is not None:
+                settings = copy.deepcopy(settings)
+                settings['publish_limit_kbps'] = args.publish_kbps
+                commit(store, settings=settings, service=service)
+            print(dump({'publish_limit_kbps': settings.get('publish_limit_kbps', 45000),
+                        'scope': 'per publisher; audio, video and ingress protocol bytes',
+                        'window_seconds': 5, 'poll_seconds': 1, 'consecutive_samples': 2}), end='')
         elif args.command in ('up', 'apply'):
             changed = copy.deepcopy(settings)
             if args.mode:

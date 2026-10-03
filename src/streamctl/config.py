@@ -67,7 +67,7 @@ class Store:
     def initialize(self, mode="local"):
         with self.lock():
             os.chmod(self.path, 0o700)
-            for directory in ("mediamtx", "certs", "backups", "reports"):
+            for directory in ("mediamtx", "watchdog", "certs", "backups", "reports"):
                 (self.path / directory).mkdir(mode=0o700, exist_ok=True)
             if not (self.path / "settings.json").exists():
                 settings = json.loads((ROOT / "config/settings.example.json").read_text())
@@ -101,6 +101,9 @@ def validate_settings(settings):
     ports = [settings.get(k) for k in ("rtmp_port", "rtmps_port", "rtsp_port", "api_port")]
     if any(type(p) is not int or not 1024 <= p <= 65535 for p in ports) or len(set(ports)) != 4:
         raise ValueError("端口须在 1024–65535 且互不重复")
+    limit = settings.get('publish_limit_kbps', 45000)
+    if type(limit) is not int or not 100 <= limit <= 1000000:
+        raise ValueError('每路推流上限须为 100–1000000 Kbps，不能关闭')
     ipaddress.ip_address(settings["bind_address"])
     hostname = settings["hostname"]
     if not isinstance(hostname, str) or not hostname or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in hostname):
@@ -112,10 +115,24 @@ def validate_settings(settings):
     return settings
 
 
-def render(settings, accounts, control, *, legacy_validation=False):
+def write_watchdog_config(store, settings, control):
+    validate_settings(settings)
+    atomic_write(store.path/'watchdog/config.json', dump({
+        'api_url': 'http://mediamtx:9997/v3/', 'username': control['username'],
+        'password': control['password'],
+        'publish_limit_kbps': settings.get('publish_limit_kbps', 45000),
+    }))
+
+
+def render(settings, accounts, control, *, legacy_validation=False, legacy_authentication=False):
     validate_settings(settings)
     validate_accounts(accounts, allow_legacy=legacy_validation)
     config = yaml.safe_load((ROOT / "config/mediamtx.base.yml").read_text())
+    # Only used to validate backups made before URL-key admission existed.
+    if legacy_authentication:
+        config['authMethod'] = 'internal'
+        config.pop('authHTTPAddress', None)
+        config.pop('authHTTPExclude', None)
     config["rtmpEncryption"] = "strict" if settings["mode"] == "production" else "no"
     config["rtmpServerCert"] = "/certs/" + Path(settings["certificate"]).name
     config["rtmpServerKey"] = "/certs/" + Path(settings["private_key"]).name

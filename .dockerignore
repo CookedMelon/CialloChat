@@ -1,0 +1,8 @@
+**
+!requirements.lock
+!docker/
+!docker/auth.Dockerfile
+!src/
+!src/streamctl/
+!src/streamctl/authserver.py
+!src/streamctl/watchdog.py

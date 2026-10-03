@@ -1,5 +1,56 @@
 name: ciallochat
 services:
+  watchdog:
+    image: "${CIALLOCHAT_AUTH_IMAGE:?Run with streamctl}"
+    pull_policy: never
+    entrypoint: ["python", "/app/watchdog.py"]
+    user: "${CIALLOCHAT_UID:?Run with streamctl}:${CIALLOCHAT_GID:?Run with streamctl}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    tmpfs: ["/tmp:size=1m,mode=1777"]
+    volumes:
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/watchdog:/watchdog:ro"
+    networks: [admission]
+    depends_on:
+      mediamtx:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import time,pathlib; assert time.time()-pathlib.Path('/tmp/watchdog-health').stat().st_mtime < 10"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  auth:
+    image: "${CIALLOCHAT_AUTH_IMAGE:?Run with streamctl}"
+    pull_policy: never
+    user: "${CIALLOCHAT_UID:?Run with streamctl}:${CIALLOCHAT_GID:?Run with streamctl}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    volumes:
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/mediamtx:/config:ro"
+    networks: [admission]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:9000/health',timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
   mediamtx:
     image: bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40
     command: ["/config/mediamtx.yml"]
@@ -8,6 +59,10 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    depends_on:
+      auth:
+        condition: service_healthy
+    networks: [default, admission]
     volumes:
       - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/mediamtx:/config:ro"
       - "${CIALLOCHAT_CERT_DIR:?Run with streamctl}:/certs:ro"
@@ -20,3 +75,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+networks:
+  admission:
+    internal: true

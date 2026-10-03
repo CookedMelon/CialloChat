@@ -52,8 +52,10 @@ def credentials(settings, username, publish_key=None, read_key=None):
     if read_key is not None:
         identity = read_identity(username)
         encoded = urllib.parse.quote(read_key, safe='')
+        url = f'rtsp://{host}:{settings["rtsp_port"]}/live/{username}?read_key={encoded}'
         result.update(read_username=identity, read_key=read_key,
-                      read_url=f'rtsp://{identity}:{encoded}@{host}:{settings["rtsp_port"]}/live/{username}')
+                      read_url=url, vrchat_read_url='rtspt://' + url[len('rtsp://'):],
+                      legacy_read_url=f'rtsp://{identity}:{encoded}@{host}:{settings["rtsp_port"]}/live/{username}')
     return result
 
 

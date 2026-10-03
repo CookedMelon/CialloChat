@@ -1,6 +1,8 @@
 # 仅展示由 CLI 生成的认证结构；完整固定配置来自 config/mediamtx.base.yml。
 # 占位哈希不能用于启动。真实配置必须通过 streamctl 生成。
-authMethod: internal
+authMethod: http
+authHTTPAddress: http://auth:9000/auth
+authHTTPExclude: []
 authInternalUsers:
   - user: ciallochat-control
     pass: "argon2:<管理密钥哈希>"

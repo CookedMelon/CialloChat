@@ -4,6 +4,10 @@
 
 已实现双密钥管理、旧账号迁移、连接撤销、TLS、备份恢复和服务器协议延迟测量。播放器调优不属于项目交付范围。实测范围与限制见验证报告。
 
+VRChat 使用 `vrchat_read_url`（`rtspt://.../live/alice?read_key=...`）。服务端直接校验 URL 观看密钥，有效地址不要求播放器处理 Basic 认证挑战。独立鉴权容器只处理准入，没有公开端口，媒体保持直接转发。
+
+每路推流默认上限 45000 Kbps，持续超限自动断开；可用 `./streamctl limits --publish-kbps 45000` 在线调整。2K/60 fps H.264 的建议视频码率为 34000 Kbps，参数及窗口规则见 [码率配置](docs/bitrate.md)。
+
 部署目标 Ubuntu 24.04，开发兼容 Ubuntu 26.04，Python ≥ 3.12。MediaMTX 固定为 **1.21.1**，镜像及 digest 见 [版本锁定](config/version.json)。完整需求见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。
 
 本地使用：
@@ -24,6 +28,7 @@
 - [OBS、FFmpeg、VLC 客户端](docs/clients.md)
 - [验证范围与结果](docs/validation.md)
 - [服务端转发延迟测量](docs/latency.md)
+- [2K 码率与自动断连](docs/bitrate.md)
 
 开发验证：
 

@@ -1,0 +1,314 @@
+{
+  "version": {
+    "mediamtx": "1.21.1",
+    "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+    "linux_amd64_archive_sha256": "653abc672a3e693f8d3b2717752492fdcfb8072291ec108d03d3dd857411b0ee",
+    "schema": 1
+  },
+  "backend": "compose",
+  "started_at": "2026-10-03T08:07:19Z",
+  "tests": [
+    {
+      "name": "startup and config load",
+      "status": "passed",
+      "seconds": 15.95
+    },
+    {
+      "name": "actual container image, ports, UID, mounts and logging",
+      "status": "passed",
+      "seconds": 1.41
+    },
+    {
+      "name": "anonymous rejected",
+      "status": "passed",
+      "seconds": 4.1
+    },
+    {
+      "name": "wrong password rejected",
+      "status": "passed",
+      "seconds": 2.12
+    },
+    {
+      "name": "unknown path rejected",
+      "status": "passed",
+      "seconds": 0.87
+    },
+    {
+      "name": "cross-path rejected",
+      "status": "passed",
+      "seconds": 1.54
+    },
+    {
+      "name": "two publishers ready",
+      "status": "passed",
+      "seconds": 6.1
+    },
+    {
+      "name": "URL watch key accepted on first DESCRIBE without Authorization or Basic challenge",
+      "status": "passed",
+      "seconds": 1.04
+    },
+    {
+      "name": "wrong URL watch key rejected",
+      "status": "passed",
+      "seconds": 2.78
+    },
+    {
+      "name": "publish key in read URL denied",
+      "status": "passed",
+      "seconds": 2.44
+    },
+    {
+      "name": "Bob URL key cannot read Alice",
+      "status": "passed",
+      "seconds": 2.45
+    },
+    {
+      "name": "duplicate URL watch keys denied",
+      "status": "passed",
+      "seconds": 0.61
+    },
+    {
+      "name": "publisher cannot access management API",
+      "status": "passed",
+      "seconds": 3.18
+    },
+    {
+      "name": "anonymous read denied",
+      "status": "passed",
+      "seconds": 0.92
+    },
+    {
+      "name": "wrong watch key denied",
+      "status": "passed",
+      "seconds": 3.01
+    },
+    {
+      "name": "username alone denied",
+      "status": "passed",
+      "seconds": 2.23
+    },
+    {
+      "name": "publish key cannot read",
+      "status": "passed",
+      "seconds": 2.61
+    },
+    {
+      "name": "publish key cannot authenticate viewer",
+      "status": "passed",
+      "seconds": 5.2
+    },
+    {
+      "name": "Bob viewer cannot read Alice",
+      "status": "passed",
+      "seconds": 3.73
+    },
+    {
+      "name": "watch key cannot publish",
+      "status": "passed",
+      "seconds": 9.0
+    },
+    {
+      "name": "viewer identity cannot publish",
+      "status": "passed",
+      "seconds": 4.44
+    },
+    {
+      "name": "viewer cannot access management API",
+      "status": "passed",
+      "seconds": 4.15
+    },
+    {
+      "name": "watch reset disconnects readers, old denied, new decoded, publisher preserved",
+      "status": "passed",
+      "seconds": 33.77
+    },
+    {
+      "name": "two concurrent readers decode H264 AAC",
+      "status": "passed",
+      "seconds": 13.51
+    },
+    {
+      "name": "Bob distinct video and audio decode",
+      "status": "passed",
+      "seconds": 11.04
+    },
+    {
+      "name": "second publisher rejected, original preserved",
+      "status": "passed",
+      "seconds": 9.02
+    },
+    {
+      "name": "cross-path rejected, Bob preserved",
+      "status": "passed",
+      "seconds": 6.88
+    },
+    {
+      "name": "disable terminates existing connection and denies reconnect",
+      "status": "passed",
+      "seconds": 29.81
+    },
+    {
+      "name": "enable permits new publish",
+      "status": "passed",
+      "seconds": 16.07
+    },
+    {
+      "name": "reset terminates old connection, old denied, new decoded",
+      "status": "passed",
+      "seconds": 38.17
+    },
+    {
+      "name": "restart preserves accounts and accepts publish",
+      "status": "passed",
+      "seconds": 60.55
+    },
+    {
+      "name": "RTMP sustained excess disconnected, below limit decoded, other publisher preserved",
+      "status": "passed",
+      "seconds": 37.72
+    },
+    {
+      "name": "RTSP publish cannot bypass bitrate limit",
+      "status": "passed",
+      "seconds": 28.61
+    },
+    {
+      "name": "production TLS validated and plaintext closed",
+      "status": "passed",
+      "seconds": 36.23
+    },
+    {
+      "name": "wrong TLS trust and hostname rejected",
+      "status": "passed",
+      "seconds": 0.2
+    },
+    {
+      "name": "untrusted actual RTMPS publisher rejected",
+      "status": "passed",
+      "seconds": 0.89
+    },
+    {
+      "name": "trusted RTMPS publish with RTSP audio video decode",
+      "status": "passed",
+      "seconds": 9.64
+    },
+    {
+      "name": "RTMPS sustained excess disconnected, below limit decoded, other publisher preserved",
+      "status": "passed",
+      "seconds": 39.19
+    },
+    {
+      "name": "RTMPS credential reset revokes live connection",
+      "status": "passed",
+      "seconds": 10.87
+    },
+    {
+      "name": "missing renewal file does not block revocation, startup still denied",
+      "status": "passed",
+      "seconds": 16.18
+    },
+    {
+      "name": "certificate update verified on TLS socket and media reconnected",
+      "status": "passed",
+      "seconds": 11.11
+    },
+    {
+      "name": "production backup restore preserves credentials and playable media",
+      "status": "passed",
+      "seconds": 47.28
+    },
+    {
+      "name": "delete terminates live publisher and rejects reconnect",
+      "status": "passed",
+      "seconds": 3.58
+    }
+  ],
+  "deployment": [
+    {
+      "mode": "local",
+      "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+      "user": "0:0",
+      "ports": {
+        "1935/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55601"
+          }
+        ],
+        "8554/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "58501"
+          }
+        ],
+        "9997/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "51319"
+          }
+        ]
+      },
+      "restart": "unless-stopped",
+      "read_only_config_and_certificates": true,
+      "logging": {
+        "Type": "json-file",
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "bitrate_watchdog_healthy_and_private": true,
+      "admission": {
+        "image": "ciallochat-auth:b5b0854e27bd8efd1d31718cbc25cb1cbc557a7c9a7d2c694b9c3ac81855331c",
+        "healthy": true,
+        "internal_network_only": true,
+        "no_published_ports": true,
+        "read_only_policy_only": true
+      }
+    },
+    {
+      "mode": "production",
+      "image": "bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40",
+      "user": "0:0",
+      "ports": {
+        "1936/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "40643"
+          }
+        ],
+        "8554/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "58501"
+          }
+        ],
+        "9997/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "51319"
+          }
+        ]
+      },
+      "restart": "unless-stopped",
+      "read_only_config_and_certificates": true,
+      "logging": {
+        "Type": "json-file",
+        "Config": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "bitrate_watchdog_healthy_and_private": true,
+      "admission": {
+        "image": "ciallochat-auth:b5b0854e27bd8efd1d31718cbc25cb1cbc557a7c9a7d2c694b9c3ac81855331c",
+        "healthy": true,
+        "internal_network_only": true,
+        "no_published_ports": true,
+        "read_only_policy_only": true
+      }
+    }
+  ],
+  "result": "passed"
+}

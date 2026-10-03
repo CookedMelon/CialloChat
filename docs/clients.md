@@ -26,7 +26,7 @@ OBS → 设置 → 直播 → 服务选择“自定义”：
 播放器打开完整 `read_url`，使用 RTSP/TCP。地址形如：
 
 ```text
-rtsp://ciallochat-read-alice:<已编码的观看密钥>@127.0.0.1:8554/live/alice
+rtsp://127.0.0.1:8554/live/alice?read_key=<已编码的观看密钥>
 ```
 
 实际值直接复制凭据文件，不要用推流密钥替代。VLC 命令示例：
@@ -38,6 +38,22 @@ unset CIALLOCHAT_READ_URL
 ```
 
 没有观看密钥、只有用户名、错误密钥或跨路凭据均被拒绝。共享 `read_url` 等于共享该路观看权限。RTSP 在本版仍未加密；观看授权与链路加密是两个要求。
+
+## VRChat 直播接入
+
+2K 屏幕建议使用 2560×1440、H.264、60 fps、CBR 34000 Kbps，AAC 192 Kbps。服务端每路默认 45000 Kbps，持续超限会断开发布连接；完整 OBS 参数和断连条件见 [码率配置](bitrate.md)。
+
+房间播放器切换到直播 / AVPro 模式，粘贴 CLI 交付的完整 `vrchat_read_url`：
+
+```text
+rtspt://stream.example.com:8554/live/alice?read_key=<已编码的观看密钥>
+```
+
+服务端从第一次 RTSP 请求的 URL 校验该路观看密钥。有效 URL 直接返回 SDP，不要求播放器处理 `401 → Authorization: Basic` 挑战。旧的 `legacy_read_url` 仅供支持用户名密码认证的客户端使用；VRChat 应使用新的 URL。已有用户无需重置密钥，用原观看密钥执行 `user credentials alice --kind read` 即可交付新地址。
+
+观看密钥不能用于推流、管理接口或别人的直播；重置、禁用和删除仍撤销旧观看连接。鉴权回调只在连接准入时工作，媒体不经过 Python。缺少 / 错误密钥或鉴权服务不可用时拒绝访问。
+
+个人的“不可信 URL”选项与房间域名许可分别生效。Public / Group Public 实例还需要房间作者允许自有域名；切换 URL 认证方式不会绕过 VRChat 地址规则。Quest 的协议兼容性与房间内画面、声音、延迟仍需客户端验证，不把服务端无挑战握手测试当成 VRChat 全部验收完成。
 
 ## FFmpeg 发布
 

@@ -8,6 +8,7 @@
 | `runtime/accounts.json` | `runtime/accounts.example.json` | `streamctl user add/import` 生成独立 Argon2id 哈希 |
 | `runtime/control.json` | `runtime/control.example.json` | setup 自动生成独立管理凭据 |
 | `runtime/mediamtx/mediamtx.yml` | `runtime/mediamtx/mediamtx.example.yml` | 从账号记录生成，不手工填入示例哈希 |
+| `runtime/watchdog/config.json` | `runtime/watchdog/config.example.json` | streamctl 从设置和管理凭据生成，仅供码率监控容器使用 |
 | 用户交付凭据 JSON | `runtime/user-credentials.example.json` | 创建账号或重置密钥时受限保存 |
 | `runtime/certs/server.crt` | `runtime/certs/server.crt.example` | 证书机构签发的服务器证书及完整中间链 |
 | `runtime/certs/server.key` | `runtime/certs/server.key.example` | 与证书对应的真实 PEM 私钥 |

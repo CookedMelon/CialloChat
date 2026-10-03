@@ -103,6 +103,8 @@ if docker image inspect "$image" >/dev/null 2>&1; then
 else
   docker pull "$image"
 fi
+STAGE=admission-image
+bash "$ROOT/scripts/build-auth.sh"
 STAGE=configuration
 ./streamctl apply
 ./streamctl config-check

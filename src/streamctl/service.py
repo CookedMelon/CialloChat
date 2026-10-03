@@ -7,7 +7,8 @@ import time
 import urllib.error
 import urllib.request
 import yaml
-from .config import ROOT, VERSION, atomic_write, dump, render, check_tls, exclusive_json
+from .config import ROOT, VERSION, atomic_write, dump, render, check_tls, exclusive_json, write_watchdog_config
+from .images import auth_image
 
 
 class Service:
@@ -20,6 +21,7 @@ class Service:
         s = self.settings
         env = os.environ.copy()
         env.update(CIALLOCHAT_RUNTIME=str(self.store.path), CIALLOCHAT_CERT_DIR=str(self.store.path / "certs"),
+                   CIALLOCHAT_AUTH_IMAGE=auth_image(),
                    CIALLOCHAT_UID=str(os.getuid()), CIALLOCHAT_GID=str(os.getgid()), CIALLOCHAT_BIND=("[" + s["bind_address"] + "]" if ":" in s["bind_address"] else s["bind_address"]),
                    CIALLOCHAT_RTMP_PORT=str(s["rtmp_port"]), CIALLOCHAT_RTMPS_PORT=str(s["rtmps_port"]),
                    CIALLOCHAT_RTSP_PORT=str(s["rtsp_port"]), CIALLOCHAT_API_PORT=str(s["api_port"]))
@@ -62,7 +64,7 @@ class Service:
                 def normalized(users):
                     return [{"user": u["user"], "pass": "<redacted>" if u["pass"] else "", "permissions": [{"action": p["action"], "path": p.get("path", "")} for p in u["permissions"]]} for u in users]
                 if normalized(actual_users) == normalized(wanted_users) and set(p["name"] for p in paths) == set(desired["paths"]):
-                    keys = ("authMethod", "api", "metrics", "pprof", "playback", "rtsp", "rtspTransports", "rtmp", "rtmpEncryption", "hls", "webrtc", "srt", "moq")
+                    keys = ("authMethod", "authHTTPAddress", "authHTTPExclude", "api", "metrics", "pprof", "playback", "rtsp", "rtspTransports", "rtmp", "rtmpEncryption", "hls", "webrtc", "srt", "moq")
                     defaults = self.api("config/path-defaults/get")
                     if all(global_config[k] == desired[k] for k in keys) and all(defaults[k] == v for k,v in desired["pathDefaults"].items()):
                         return
@@ -106,9 +108,11 @@ class Service:
     def up(self):
         if self.settings["mode"] == "production":
             check_tls(self.store, self.settings)
+        subprocess.run(['bash', str(ROOT / 'scripts/build-auth.sh')], check=True)
+        write_watchdog_config(self.store, self.settings, self.control)
         self.compose(["config", "--quiet"])
         atomic_write(self.store.path / "active.json", dump({"mode": self.settings["mode"]}))
-        self.compose(["up", "-d"])
+        self.compose(["up", "-d", "--wait", "--wait-timeout", "45"])
         self.wait_loaded((self.store.path / "mediamtx/mediamtx.yml").read_text())
 
     def reload_certificate(self):
@@ -151,7 +155,8 @@ def commit(store, accounts=None, settings=None, revoke=(), service=None, revoke_
     accounts = accounts if accounts is not None else old_accounts
     service = service or Service(store, old_settings, control)
     running = service.running()
-    if running and settings != old_settings:
+    changed_keys = {k for k in set(settings) | set(old_settings) if settings.get(k) != old_settings.get(k)}
+    if running and changed_keys - {'publish_limit_kbps'}:
         raise ValueError("运行中的服务设置变更需先 down，修改设置后 apply，再 up")
     # An expired or missing renewal file must not prevent revoking a live
     # publisher. Startup and explicit configuration application still require
@@ -171,10 +176,12 @@ def commit(store, accounts=None, settings=None, revoke=(), service=None, revoke_
             service.wait_loaded(generated)
         atomic_write(store.path / "settings.json", dump(settings))
         atomic_write(store.path / "accounts.json", dump(accounts))
+        write_watchdog_config(store, settings, control)
     except Exception:
         atomic_write(store.path / "mediamtx/mediamtx.yml", previous["config"])
         atomic_write(store.path / "settings.json", dump(previous["settings"]))
         atomic_write(store.path / "accounts.json", dump(previous["accounts"]))
+        write_watchdog_config(store, old_settings, control)
         if running:
             service.wait_loaded(previous["config"])
         journal.unlink(missing_ok=True)
@@ -203,6 +210,7 @@ def recover(store):
         atomic_write(store.path / "accounts.json", dump(previous["accounts"]))
         if "control" in previous:
             atomic_write(store.path / "control.json", dump(previous["control"]))
+        write_watchdog_config(store, previous['settings'], store.read('control.json'))
         if "certificates" in previous:
             for path in (store.path / "certs").iterdir():
                 if path.is_file() or path.is_symlink():
@@ -286,8 +294,12 @@ def restore(store, source, migrate_credentials=None):
     if control.get("username") != "ciallochat-control" or not HASHER.verify(control["password_hash"][7:], control["password"]):
         raise ValueError("管理凭据校验失败")
     legacy = accounts['schema'] == 1
-    if render(settings, accounts, control, legacy_validation=legacy) != data["config"]:
-        raise ValueError("备份配置与账号数据不一致")
+    current_config = render(settings, accounts, control, legacy_validation=legacy)
+    if current_config != data["config"]:
+        previous_config = render(settings, accounts, control, legacy_validation=legacy, legacy_authentication=True)
+        if previous_config != data['config']:
+            raise ValueError("备份配置与账号数据不一致")
+        data['config'] = current_config
     delivered = []
     if legacy:
         if migrate_credentials is None:

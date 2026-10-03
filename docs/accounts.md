@@ -12,7 +12,7 @@ umask 077
 ./streamctl user info alice
 ```
 
-创建同时交付 `publish_username`、`publish_key`、`publish_url`、`read_username`、`read_key`、`read_url`。把 `publish_url` 交给发布者，把 `read_url` 交给观看者。观看身份形如 `ciallochat-read-alice`，由 CLI 生成；不要用业务用户名或推流密钥猜测观看凭据。`password` 是兼容旧调用的推流密钥别名。
+创建同时交付 `publish_username`、`publish_key`、`publish_url`、`read_username`、`read_key`、`read_url`、`vrchat_read_url` 和 `legacy_read_url`。把 `publish_url` 交给发布者，把 `read_url` 交给普通观看者，把 `vrchat_read_url` 交给 VRChat 观看者。新地址用 `?read_key=...` 传递观看密钥，由服务端直接校验，正确密钥无需 Basic 挑战。`legacy_read_url` 保留旧用户名密码地址，内部观看身份形如 `ciallochat-read-alice`。`password` 是兼容旧调用的推流密钥别名。
 
 每个账号固定路径 `live/<username>`。用户名为 1–48 位 ASCII，首位字母或数字，其余可含 `_`、`-`；保留 `any`、`admin` 及 `ciallochat-` 前缀。两类密钥独立随机生成，默认各有 192 bit 熵；自选密钥为 12–256 字符，不能有控制字符，两类密钥不得相同。分别用独立随机盐的 Argon2id 保存；list/info 和业务备份不输出媒体明文密钥。
 
@@ -71,6 +71,15 @@ schema 1 旧账号不会被普通启动、配置应用或账号命令接受。�
 ```
 
 原推流哈希原样保留，每个账号独立生成观看密钥，受限文件交付其 `read_url`；账号升级为 schema 2，删除匿名 read 权限。迁移前保留原数据备份。迁移失败或中断时恢复到禁止媒体访问的配置，普通启动继续拒绝旧数据；不会重新开放匿名观看。排除错误后重新执行迁移，不要手工恢复旧匿名配置。
+
+## 推流上限
+
+```bash
+./streamctl limits
+./streamctl limits --publish-kbps 45000
+```
+
+默认每路 45000 Kbps，旧实例未配置字段时同样生效；不可设为 0 关闭。在线修改不重启发布者。码率持续超限会自动断开该发布连接，账号、密钥和其他发布者保持不变，详细规则见 [码率限制](bitrate.md)。
 
 ## 备份恢复
 

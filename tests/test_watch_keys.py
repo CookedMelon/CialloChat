@@ -134,5 +134,17 @@ class WatchKeys(unittest.TestCase):
         self.assertTrue(matches(updated['users'][0]['read_key_hash'],json.loads(target.read_text())[0]['read_key']))
         self.assertNotIn('any',{u['user'] for u in yaml.safe_load((self.store.path/'mediamtx/mediamtx.yml').read_text())['authInternalUsers']})
 
+    def test_pre_url_key_backup_restores_current_admission_without_changing_keys(self):
+        old_config = render(self.s, self.a, self.c, legacy_authentication=True)
+        source = Path(self.temp.name)/'pre-url-backup.json'
+        atomic_write(source, dump(dict(version=VERSION, settings=self.s, accounts=self.a,
+                                      control=self.c, config=old_config)))
+        with patch.object(Service, 'running', return_value=False):
+            restore(self.store, source)
+        self.assertEqual(self.store.load()[1], self.a)
+        current = yaml.safe_load((self.store.path/'mediamtx/mediamtx.yml').read_text())
+        self.assertEqual(current['authMethod'], 'http')
+        self.assertEqual(current['authHTTPExclude'], [])
+
 
 if __name__ == '__main__': unittest.main()

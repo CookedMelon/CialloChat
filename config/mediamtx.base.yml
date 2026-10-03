@@ -1,7 +1,9 @@
 # MediaMTX v1.21.1; generated configuration adds accounts, paths and mode.
 logLevel: info
 logDestinations: [stdout]
-authMethod: internal
+authMethod: http
+authHTTPAddress: http://auth:9000/auth
+authHTTPExclude: []
 api: true
 apiAddress: :9997
 metrics: false

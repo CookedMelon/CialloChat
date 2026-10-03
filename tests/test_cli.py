@@ -16,6 +16,7 @@ class CLI(unittest.TestCase):
         self.runtime = Path(self.tmp.name)/'instance'
         self.env = os.environ.copy()
         self.env['PYTHONPATH'] = str(ROOT/'src')
+        self.env['CIALLOCHAT_PROJECT'] = 'ciallochat-unit-' + str(os.getpid())
         self.run_cli('init')
 
     def run_cli(self,*args,input=None,expect=0):
@@ -35,12 +36,24 @@ class CLI(unittest.TestCase):
         self.assertNotIn('password',listed)
         self.assertNotIn('argon2',listed)
 
+    def test_publish_limit_default_update_and_disabled_limit_rejected(self):
+        self.assertEqual(json.loads(self.run_cli('limits'))['publish_limit_kbps'], 45000)
+        self.assertEqual(json.loads(self.run_cli('limits', '--publish-kbps', '32000'))['publish_limit_kbps'], 32000)
+        before = (self.runtime/'settings.json').read_bytes()
+        self.run_cli('limits', '--publish-kbps', '0', expect=1)
+        self.assertEqual((self.runtime/'settings.json').read_bytes(), before)
+        policy = json.loads((self.runtime/'watchdog/config.json').read_text())
+        self.assertEqual(policy['publish_limit_kbps'], 32000)
+        self.assertEqual((self.runtime/'watchdog/config.json').stat().st_mode & 0o777, 0o600)
+
     def test_url_encoding_and_explicit_credentials(self):
         value='secret&with#%+/:?编码'
         credentials=json.loads(self.run_cli('user','add','alice','--password-stdin',input=value+'\n'))
         from urllib.parse import urlparse,parse_qs
         self.assertEqual(parse_qs(urlparse(credentials['publish_url']).query)['pass'],[value])
-        self.assertNotIn('?',credentials['read_url'])
+        self.assertEqual(parse_qs(urlparse(credentials['read_url']).query)['read_key'], [credentials['read_key']])
+        self.assertIsNone(urlparse(credentials['read_url']).username)
+        self.assertEqual(credentials['vrchat_read_url'].split('://',1)[0], 'rtspt')
         read=json.loads(self.run_cli('user','credentials','alice','--password-stdin',input=value+'\n'))
         self.assertEqual(read['publish_url'],credentials['publish_url'])
         self.assertNotIn('read_url',read)
@@ -53,8 +66,8 @@ class CLI(unittest.TestCase):
         publish = 'publisher-special&#+%123'
         read = 'reader-special&#+%/中文123'
         initial = json.loads(self.run_cli('user','add','alice','--password-stdin','--read-key-stdin',input=publish+'\n'+read+'\n'))
-        from urllib.parse import urlparse, unquote
-        self.assertEqual(unquote(urlparse(initial['read_url']).password),read)
+        from urllib.parse import urlparse, parse_qs
+        self.assertEqual(parse_qs(urlparse(initial['read_url']).query)['read_key'],[read])
         self.assertNotIn(publish,initial['read_url'])
         before = json.loads((self.runtime/'accounts.json').read_text())['users'][0]
         changed = json.loads(self.run_cli('user','reset-read-key','alice'))

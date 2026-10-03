@@ -15,9 +15,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.parse
+import yaml
+from streamctl.authserver import AdmissionServer, Policy
 from streamctl.accounts import new_account, new_password, hash_password, credentials, read_identity
-from streamctl.config import ROOT, Store, VERSION, atomic_write, dump, render, check_tls
+from streamctl.config import ROOT, Store, VERSION, atomic_write, dump, render, check_tls, write_watchdog_config
 from streamctl.service import Service, commit, backup, restore
+from streamctl.images import auth_image
 
 
 def wait(predicate, seconds=10):
@@ -54,6 +57,9 @@ class Harness:
         atomic_write(self.store.path / 'mediamtx/mediamtx.yml', render(settings, accounts, control))
         self.service = Service(self.store)
         self.process = None
+        self.watchdog_process = None
+        self.auth_server = None
+        self.auth_thread = None
         self.publishers = []
         self.handles = []
         self.log = self.store.path / 'server.log'
@@ -70,26 +76,53 @@ class Harness:
                     self.stop_service(); self.start(); return ''
                 raise ValueError('unsupported native lifecycle operation')
             self.service.compose = native_compose
+            original_wait_loaded = self.service.wait_loaded
+            def native_wait_loaded(expected):
+                config = yaml.safe_load(expected)
+                config['authHTTPAddress'] = self.auth_address
+                original_wait_loaded(yaml.safe_dump(config))
+            self.service.wait_loaded = native_wait_loaded
 
     def start(self):
         self.service.settings = self.store.read('settings.json')
         if self.args.mediamtx:
+            import threading
+            self.auth_server = AdmissionServer(('127.0.0.1', 0), Policy(self.store.path/'mediamtx/mediamtx.yml'))
+            self.auth_address = f'http://127.0.0.1:{self.auth_server.server_port}/auth'
+            self.auth_thread = threading.Thread(target=self.auth_server.serve_forever, daemon=True)
+            self.auth_thread.start()
             s = self.service.settings
             env = os.environ.copy()
             env.update(MTX_APIADDRESS=f'127.0.0.1:{s["api_port"]}', MTX_RTSPADDRESS=f'127.0.0.1:{s["rtsp_port"]}',
                        MTX_RTMPADDRESS=f'127.0.0.1:{s["rtmp_port"]}', MTX_RTMPSADDRESS=f'127.0.0.1:{s["rtmps_port"]}',
-                       MTX_RTMPSERVERCERT=str(self.store.path/s['certificate']), MTX_RTMPSERVERKEY=str(self.store.path/s['private_key']))
+                       MTX_RTMPSERVERCERT=str(self.store.path/s['certificate']), MTX_RTMPSERVERKEY=str(self.store.path/s['private_key']),
+                       MTX_AUTHHTTPADDRESS=self.auth_address)
             file = open(self.log, 'ab'); self.handles.append(file)
             self.process = subprocess.Popen([self.args.mediamtx, str(self.store.path/'mediamtx/mediamtx.yml')], env=env, stdout=file, stderr=file)
             self.service.wait_loaded((self.store.path/'mediamtx/mediamtx.yml').read_text())
+            write_watchdog_config(self.store, s, self.store.read('control.json'))
+            health = self.store.path/'watchdog-health'
+            health.unlink(missing_ok=True)
+            self.watchdog_process = subprocess.Popen([sys.executable, str(ROOT/'src/streamctl/watchdog.py'),
+                '--config', str(self.store.path/'watchdog/config.json'),
+                '--api-url', f'http://127.0.0.1:{s["api_port"]}/v3/', '--health-file', str(health)],
+                stdout=file, stderr=file)
+            wait(lambda: health.exists())
         else:
             self.service.up()
 
     def stop_service(self):
         if self.args.mediamtx:
+            if self.watchdog_process and self.watchdog_process.poll() is None:
+                self.watchdog_process.terminate(); self.watchdog_process.wait(timeout=8)
+            self.watchdog_process = None
             if self.process and self.process.poll() is None:
                 self.process.terminate(); self.process.wait(timeout=8)
             self.process = None
+            if self.auth_server:
+                self.auth_server.shutdown(); self.auth_server.server_close()
+                self.auth_thread.join(timeout=3)
+                self.auth_server = None
         else:
             self.service.down()
 
@@ -129,9 +162,36 @@ class Harness:
         mounts = {m['Destination']: m for m in item['Mounts']}
         assert set(mounts) == {'/config', '/certs'}
         assert all(m['Type'] == 'bind' and m['RW'] is False for m in mounts.values())
+        auth_id = self.service.compose(['ps', '-q', 'auth']).strip()
+        assert auth_id, 'missing admission container'
+        auth = json.loads(subprocess.check_output(['docker', 'inspect', auth_id], text=True, timeout=15))[0]
+        assert auth['Config']['Image'] == auth_image(), 'stale admission image'
+        assert auth['State']['Health']['Status'] == 'healthy'
+        assert auth['HostConfig']['ReadonlyRootfs'] is True
+        assert not auth['HostConfig']['PortBindings'], 'admission port must remain private'
+        assert len(auth['Mounts']) == 1 and auth['Mounts'][0]['Destination'] == '/config'
+        assert auth['Mounts'][0]['RW'] is False
+        networks = auth['NetworkSettings']['Networks']
+        assert len(networks) == 1
+        network = json.loads(subprocess.check_output(['docker', 'network', 'inspect', next(iter(networks))], text=True, timeout=15))[0]
+        assert network['Internal'] is True
+        guard_id = self.service.compose(['ps', '-q', 'watchdog']).strip()
+        assert guard_id, 'missing bitrate watchdog'
+        guard = json.loads(subprocess.check_output(['docker', 'inspect', guard_id], text=True, timeout=15))[0]
+        assert guard['State']['Health']['Status'] == 'healthy'
+        assert guard['Config']['Image'] == auth_image()
+        assert guard['HostConfig']['ReadonlyRootfs'] is True
+        assert not guard['HostConfig']['PortBindings']
+        assert len(guard['Mounts']) == 1 and guard['Mounts'][0]['Destination'] == '/watchdog'
+        assert guard['Mounts'][0]['RW'] is False
+        assert set(guard['NetworkSettings']['Networks']) == set(networks)
         return {'mode': self.service.settings['mode'], 'image': item['Config']['Image'],
                 'user': item['Config']['User'], 'ports': ports, 'restart': 'unless-stopped',
-                'read_only_config_and_certificates': True, 'logging': host['LogConfig']}
+                'read_only_config_and_certificates': True, 'logging': host['LogConfig'],
+                'bitrate_watchdog_healthy_and_private': True,
+                'admission': {'image': auth['Config']['Image'], 'healthy': True,
+                              'internal_network_only': True, 'no_published_ports': True,
+                              'read_only_policy_only': True}}
 
     def ready(self, path):
         p = self.state(path); return bool(p and p['ready'])
@@ -139,18 +199,27 @@ class Harness:
     def source_id(self, path):
         return self.state(path)['source']['id']
 
-    def publish(self, username='alice', path=None, value=None, anonymous=False, tls=False, trusted=True):
+    def publish(self, username='alice', path=None, value=None, anonymous=False, tls=False, trusted=True,
+                video_kbps=None, rtsp=False, resolution='1280x720', fps=30, audio_kbps=128, log_level='error', source_file=None):
         s = self.service.settings
         query = '' if anonymous else '?' + urllib.parse.urlencode({'user':username, 'pass':value if value is not None else self.passwords[username]})
         url = f'{"rtmps" if tls else "rtmp"}://localhost:{s["rtmps_port" if tls else "rtmp_port"]}/{path or "live/"+username}' + query
-        cmd = [self.args.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-re', '-f', 'lavfi', '-i',
-               f'color=c={"red" if username == "alice" else "blue"}:s=1280x720:r=30',
+        if rtsp:
+            url = f'rtsp://{username}:{urllib.parse.quote(self.passwords[username], safe="")}@127.0.0.1:{s["rtsp_port"]}/live/{username}'
+        cmd = [self.args.ffmpeg, '-hide_banner', '-loglevel', log_level, '-nostdin', '-re', '-f', 'lavfi', '-i',
+               f'color=c={"red" if username == "alice" else "blue"}:s={resolution}:r={fps}',
                '-re', '-f', 'lavfi', '-i', f'sine=frequency={440 if username == "alice" else 880}:sample_rate=48000',
                '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p',
-               '-b:v', '2M', '-g', '30', '-c:a', 'aac', '-b:a', '128k']
+               '-b:v', '2M', '-g', str(fps), '-c:a', 'aac', '-b:a', str(audio_kbps)+'k']
+        if video_kbps:
+            cmd += ['-b:v', str(video_kbps)+'k', '-minrate', str(video_kbps)+'k',
+                    '-maxrate', str(video_kbps)+'k', '-bufsize', str(video_kbps)+'k', '-x264-params', 'nal-hrd=cbr']
+        if source_file:
+            cmd = [self.args.ffmpeg, '-hide_banner', '-loglevel', log_level, '-nostdin',
+                   '-stream_loop', '-1', '-re', '-i', str(source_file), '-c', 'copy']
         if tls:
             cmd += ['-tls_verify', '1', '-ca_file', str(self.store.path/'certs/ca.crt') if trusted else '/etc/ssl/certs/ca-certificates.crt']
-        cmd += ['-f', 'flv', url]
+        cmd += ['-f', 'rtsp', '-rtsp_transport', 'tcp', url] if rtsp else ['-f', 'flv', url]
         file = open(self.store.path/f'publisher-{len(self.publishers)}.log', 'wb'); self.handles.append(file)
         p = subprocess.Popen(cmd, stdout=file, stderr=file)
         self.publishers.append(p)
@@ -158,6 +227,60 @@ class Harness:
 
     def read_url(self, username):
         return credentials(self.service.settings, username, read_key=self.read_keys[username])['read_url']
+
+    def bitrate_limit(self, tls=False, rtsp=False):
+        original = self.store.read('settings.json').get('publish_limit_kbps', 45000)
+        accounts = self.store.read('accounts.json')
+        source = self.source_id('live/alice')
+        def limit(value):
+            s, a, c = self.store.load()
+            s['publish_limit_kbps'] = value
+            with self.store.lock(): commit(self.store, settings=s, service=self.service)
+            self.service.settings = self.store.read('settings.json')
+        if self.bob.poll() is None:
+            self.bob.terminate(); self.bob.wait(timeout=5)
+        wait(lambda:not self.ready('live/bob'))
+        try:
+            limit(1000)
+            excessive = self.publish('bob', tls=tls, rtsp=rtsp, video_kbps=2000)
+            wait(lambda:self.ready('live/bob'))
+            wait(lambda:excessive.poll() is not None, 15)
+            wait(lambda:not self.ready('live/bob'))
+            assert self.alice.poll() is None and self.source_id('live/alice') == source
+            self.bob = self.publish('bob', tls=tls, rtsp=rtsp, video_kbps=500)
+            wait(lambda:self.ready('live/bob'))
+            self.read('bob', 8)
+            assert self.bob.poll() is None, 'below-limit publisher was disconnected'
+            assert self.store.read('accounts.json') == accounts, 'rate enforcement changed accounts or keys'
+        finally:
+            limit(original)
+            if self.bob.poll() is None:
+                self.bob.terminate(); self.bob.wait(timeout=5)
+
+    def first_request(self, username='alice', key=None, expected=200):
+        # A VRChat-like reader supplies only the URL, with no Authorization
+        # header and no support for retrying a Basic authentication challenge.
+        value = self.read_keys[username] if key is None else key
+        url = credentials(self.service.settings, username, read_key=value)['read_url']
+        with socket.create_connection(('127.0.0.1', self.service.settings['rtsp_port']), timeout=5) as sock:
+            sock.settimeout(5)
+            sock.sendall(f'DESCRIBE {url} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n'.encode())
+            reply = b''
+            while b'\r\n\r\n' not in reply:
+                chunk = sock.recv(8192)
+                assert chunk, 'connection ended before RTSP response'
+                reply += chunk
+            head = reply.split(b'\r\n\r\n', 1)[0]
+            assert head.startswith(f'RTSP/1.0 {expected} '.encode()), 'unexpected first RTSP response'
+            if expected == 200:
+                assert b'www-authenticate:' not in head.lower(), 'reader required a Basic challenge'
+
+    def rejected_query(self, username='alice', key='incorrect-watch-key', path=None, suffix=''):
+        host = f"127.0.0.1:{self.service.settings['rtsp_port']}"
+        url = f'rtsp://{host}/{path or "live/"+username}?read_key=' + urllib.parse.quote(key, safe='') + suffix
+        result = subprocess.run([self.args.ffprobe,'-v','error','-rtsp_transport','tcp',
+                                 '-show_streams',url],capture_output=True,timeout=12)
+        assert result.returncode != 0 and b'401' in result.stderr, 'URL watch key rejection unproven'
 
     def read(self, username, seconds=3):
         url = self.read_url(username)
@@ -213,7 +336,7 @@ class Harness:
             assert 'certificate' in client and ('verif' in client or 'trust' in client), 'no explicit client certificate rejection'
             assert '[RTMPS]' in reason and 'closed:' in reason, 'no closed server TLS connection'
         else:
-            assert expected in reason.lower() or ('not configured' in reason.lower() and path not in {u['stream_path'] for u in self.store.read('accounts.json')['users']}), 'no server rejection evidence'
+            assert expected in reason.lower() or (expected == 'authentication' and 'failed to authenticate' in reason.lower()) or ('not configured' in reason.lower() and path not in {u['stream_path'] for u in self.store.read('accounts.json')['users']}), 'no server rejection evidence'
         after = self.state(path)
         assert (after.get('source') if after else None) == source, 'existing publisher changed or rejected path became ready'
 
@@ -237,14 +360,73 @@ class Harness:
             commit(self.store,a,revoke=revoke,service=self.service,revoke_states=states)
 
 
+def profile_validation(args):
+    report = {'backend':'native' if args.mediamtx else 'compose', 'result':'failed', 'profile': {
+        'resolution':'2560x1440', 'fps':60, 'video_kbps':34000, 'audio_kbps':192, 'limit_kbps':45000}}
+    status = 1
+    with tempfile.TemporaryDirectory(prefix='ciallochat-profile-') as directory:
+        h = Harness(args, directory)
+        try:
+            subprocess.run([str(ROOT/'scripts/make-test-cert.sh'),str(h.store.path/'certs')],check=True,stdout=subprocess.DEVNULL)
+            s, a, c = h.store.load(); s['mode'] = 'production'
+            atomic_write(h.store.path/'settings.json',dump(s))
+            atomic_write(h.store.path/'mediamtx/mediamtx.yml',render(s,a,c))
+            h.start()
+            if not args.mediamtx: report['deployment'] = h.deployment_state()
+            h.bob = h.publish('bob', tls=True, video_kbps=34000, resolution='2560x1440', fps=60,
+                              audio_kbps=192, log_level='info', source_file=args.profile_input)
+            report['stage'] = 'publisher startup'
+            wait(lambda:h.ready('live/bob'), 30)
+            report['stage'] = 'RTSP describe and format'
+            h.first_request('bob')
+            streams = subprocess.check_output([args.ffprobe, '-v','error','-rtsp_transport','tcp',
+                '-show_entries','stream=codec_name,width,height,r_frame_rate','-of','json',h.read_url('bob')],timeout=12)
+            video = next(x for x in json.loads(streams)['streams'] if x['codec_name']=='h264')
+            report['advertised_video'] = video
+            assert (video['width'],video['height'],video['r_frame_rate']) == (2560,1440,'60/1')
+            source = h.source_id('live/bob')
+            def counter():
+                return next(x['inboundBytes'] for x in h.service.api('rtmps/conns/list?itemsPerPage=10000')['items'] if x['id']==source)
+            baseline, start = counter(), time.monotonic()
+            report['stage'] = 'decode and ingress measurement'
+            h.read('bob', 8)
+            rate = (counter()-baseline)*8/(time.monotonic()-start)/1000
+            report['actual_ingress_kbps'] = round(rate)
+            assert 30000 < rate < 45000, f'unexpected measured ingress rate: {rate:.0f} Kbps'
+            assert h.bob.poll() is None and h.source_id('live/bob') == source
+            report.update(result='passed', actual_ingress_kbps=round(rate),
+                          video_and_audio_decoded=True, no_basic_challenge=True,
+                          remained_connected_under_default_limit=True)
+            status = 0
+            print('PASS 1440p60 H264 34000 Kbps and AAC 192 Kbps through RTMPS and RTSP; default cap preserved',flush=True)
+        except Exception as exc:
+            report['error'] = type(exc).__name__ + (': '+str(exc) if isinstance(exc, AssertionError) else '')
+            import re
+            logs = sorted(h.store.path.glob('publisher-*.log'),key=lambda p:p.stat().st_mtime)
+            if logs:
+                tail = re.sub(r'(?:rtmps?|rtspt?)://\S+', '[REDACTED URL]', logs[-1].read_text()[-3000:])
+                for secret in list(h.passwords.values()) + list(h.read_keys.values()):
+                    tail = tail.replace(secret, '[REDACTED]')
+                report['publisher_tail'] = tail
+            print('FAIL high bitrate profile ('+type(exc).__name__+')',flush=True)
+        finally:
+            h.cleanup()
+    atomic_write(Path(args.report),dump(report))
+    return status
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mediamtx', help='Explicit native binary for auxiliary validation (not a Docker deployment check)')
     parser.add_argument('--ffmpeg', default='ffmpeg'); parser.add_argument('--ffprobe', default='ffprobe')
     parser.add_argument('--ports', type=int, nargs=4, metavar=('RTMP','RTMPS','RTSP','API'))
     parser.add_argument('--report', default=str(ROOT/'runtime/reports/smoke.json'))
+    parser.add_argument('--profile-only', action='store_true', help='Validate real 1440p60/34 Mbps RTMPS ingress and RTSP decode')
+    parser.add_argument('--profile-input', help='Optional pre-encoded 1440p60/34 Mbps H264 AAC file; publisher copies codecs')
     args = parser.parse_args()
     os.umask(0o077)
+    if args.profile_only:
+        return profile_validation(args)
     report = {'version':VERSION, 'backend':'native' if args.mediamtx else 'compose', 'started_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()), 'tests':[]}
     status = 0
     def test(name, operation):
@@ -272,6 +454,11 @@ def main():
                 h.alice = h.publish(); h.bob = h.publish('bob')
                 wait(lambda:h.ready('live/alice') and h.ready('live/bob'))
             test('two publishers ready',publish_both)
+            test('URL watch key accepted on first DESCRIBE without Authorization or Basic challenge', h.first_request)
+            test('wrong URL watch key rejected', h.rejected_query)
+            test('publish key in read URL denied', lambda: h.rejected_query(key=h.passwords['alice']))
+            test('Bob URL key cannot read Alice', lambda: h.rejected_query(key=h.read_keys['bob']))
+            test('duplicate URL watch keys denied', lambda: h.rejected_query(key=h.read_keys['alice'], suffix='&read_key=incorrect-watch-key'))
             def publisher_api_denied():
                 denied = Service(h.store, h.service.settings, {'username':'alice','password':h.passwords['alice']})
                 try: denied.api('config/global/get')
@@ -346,6 +533,8 @@ def main():
                 assert h.store.read('accounts.json') == before
                 h.alice=h.publish(); wait(lambda:h.ready('live/alice')); h.read('alice')
             test('restart preserves accounts and accepts publish',persistence)
+            test('RTMP sustained excess disconnected, below limit decoded, other publisher preserved', h.bitrate_limit)
+            test('RTSP publish cannot bypass bitrate limit', lambda:h.bitrate_limit(rtsp=True))
             def tls_setup():
                 h.stop_service()
                 subprocess.run([str(ROOT/'scripts/make-test-cert.sh'),str(h.store.path/'certs')],check=True,stdout=subprocess.DEVNULL)
@@ -370,6 +559,7 @@ def main():
             def tls_media():
                 h.alice=h.publish(tls=True); wait(lambda:h.ready('live/alice')); h.read('alice')
             test('trusted RTMPS publish with RTSP audio video decode',tls_media)
+            test('RTMPS sustained excess disconnected, below limit decoded, other publisher preserved', lambda:h.bitrate_limit(tls=True))
             def tls_reset():
                 h.change('reset'); wait(lambda:h.alice.poll() is not None)
                 h.rejected(tls=True,value=h.old_password)

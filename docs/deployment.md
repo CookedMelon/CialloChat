@@ -76,6 +76,16 @@ chmod 600 runtime/settings.json runtime/certs/server.crt runtime/certs/server.ke
 
 单条直播出口带宽约等于码率 × 同时读者数，再预留协议开销；第一版无转码、流量额度、录制、HLS 或 WebRTC，不承诺公网延迟。
 
+## URL 观看密钥鉴权容器
+
+Compose 运行 `mediamtx`、`auth` 和 `watchdog`。setup / up 自动构建鉴权与码率监控共用镜像：Python 基础镜像固定 digest，依赖沿用 requirements.lock，镜像标签由 Dockerfile、依赖、两份服务源文件和构建排除规则的 SHA256 决定。构建上下文仅包含这五个文件，不含 runtime、凭据或证书。已有相同内容镜像可直接复用，离线部署可事先构建并通过 docker save/load 搬运。
+
+`auth` 没有宿主机端口，位于 Docker 内部网络，只读挂载生成的哈希权限配置；不挂载管理明文、账号报告或私钥。服务启动等待其健康检查，失败时拒绝新连接。API、推流和观看没有鉴权豁免。成功校验的短期缓存随生成配置原子替换立即失效；账号撤销仍通过 Control API 终止已有连接。
+
+`watchdog` 也没有公开端口，只读挂载专用监控配置，使用独立目录中的管理凭据检查累计入站字节并断开超限发布连接，不读取账号数据库、用户交付凭据或 TLS 私钥。`up` 等待全部容器健康。默认每路 45000 Kbps，在线修改命令和断连窗口见 [码率限制](bitrate.md)。
+
+升级先打包源代码和镜像，在隔离 Compose 项目上验证并备份正式实例。首次从内部认证升级时，先用旧代码执行 `./streamctl down`，再更新源代码，执行 `./streamctl apply`、`./streamctl config-check` 和 `./streamctl up`。这样避免旧媒体容器在加入内部网络之前加载新鉴权地址。直播需重连，账号、密钥和 TLS 文件无需重置。升级前的 schema 2 备份仍可恢复，恢复时自动生成新的 URL 密钥鉴权配置。
+
 依据：[Docker Ubuntu 安装](https://docs.docker.com/engine/install/ubuntu/)、[Compose 合并规则](https://docs.docker.com/reference/compose-file/merge/)、[MediaMTX 1.21.1](https://github.com/bluenviron/mediamtx/releases/tag/v1.21.1)。
 
 ## 公网 IP 证书与自动续期

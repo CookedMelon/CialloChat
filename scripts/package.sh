@@ -14,7 +14,7 @@ output.mkdir(exist_ok=True)
 archive=output/'ciallochat-dual-key.tar.gz'
 files=[]
 for name in ('README.md','PROJECT_PLAN.md','setup.sh','streamctl','requirements.lock',
-             'compose.yaml','compose.local.yaml','.gitignore','config','docs','scripts','src','tests','examples'):
+             'compose.yaml','compose.local.yaml','.gitignore','.dockerignore','docker','config','docs','scripts','src','tests','examples'):
     source=root/name
     candidates=source.rglob('*') if source.is_dir() else [source]
     files.extend(p for p in candidates if p.is_file() and not p.is_symlink() and
