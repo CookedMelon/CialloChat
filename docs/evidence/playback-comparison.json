@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "test": "four-stream-x264-1440p-comparison",
+  "fixture_parameters": [
+    {
+      "id": "T01",
+      "fps": 60,
+      "video_frames": 720,
+      "vcl_slices_per_frame": 1,
+      "keyframe_intervals_seconds": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "nal_hrd_parameters_present_flag": [
+        "0"
+      ],
+      "file_bitrate_kbps": 12224.9
+    },
+    {
+      "id": "T02",
+      "fps": 30,
+      "video_frames": 360,
+      "vcl_slices_per_frame": 1,
+      "keyframe_intervals_seconds": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "nal_hrd_parameters_present_flag": [
+        "0"
+      ],
+      "file_bitrate_kbps": 12415.5
+    },
+    {
+      "id": "T03",
+      "fps": 60,
+      "video_frames": 720,
+      "vcl_slices_per_frame": 1,
+      "keyframe_intervals_seconds": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "nal_hrd_parameters_present_flag": [
+        "0"
+      ],
+      "file_bitrate_kbps": 6177.6
+    },
+    {
+      "id": "T04",
+      "fps": 60,
+      "video_frames": 720,
+      "vcl_slices_per_frame": 1,
+      "keyframe_intervals_seconds": [
+        4.1667,
+        4.1667
+      ],
+      "nal_hrd_parameters_present_flag": [
+        "0"
+      ],
+      "file_bitrate_kbps": 12173.3
+    }
+  ],
+  "server_loopback_decoding": [
+    {
+      "id": "T01",
+      "describe_status": 200,
+      "basic_challenge": false,
+      "video_frames": 121,
+      "unique_video_frames": 121,
+      "audio_frames": 141,
+      "returncode": 0,
+      "error_output": false,
+      "passed": true
+    },
+    {
+      "id": "T02",
+      "describe_status": 200,
+      "basic_challenge": false,
+      "video_frames": 56,
+      "unique_video_frames": 56,
+      "audio_frames": 141,
+      "returncode": 0,
+      "error_output": false,
+      "passed": true
+    },
+    {
+      "id": "T03",
+      "describe_status": 200,
+      "basic_challenge": false,
+      "video_frames": 130,
+      "unique_video_frames": 130,
+      "audio_frames": 142,
+      "returncode": 0,
+      "error_output": false,
+      "passed": true
+    },
+    {
+      "id": "T04",
+      "describe_status": 200,
+      "basic_challenge": false,
+      "video_frames": 713,
+      "unique_video_frames": 713,
+      "audio_frames": 658,
+      "returncode": 0,
+      "error_output": false,
+      "sample_seconds": 14,
+      "passed": true
+    }
+  ],
+  "active_paths": [
+    {
+      "name": "live/vrc-test-01",
+      "ready": true,
+      "bytes_received": 355553474,
+      "source_type": "rtmpsConn"
+    },
+    {
+      "name": "live/vrc-test-02",
+      "ready": true,
+      "bytes_received": 359924030,
+      "source_type": "rtmpsConn"
+    },
+    {
+      "name": "live/vrc-test-03",
+      "ready": true,
+      "bytes_received": 178628537,
+      "source_type": "rtmpsConn"
+    },
+    {
+      "name": "live/vrc-test-04",
+      "ready": true,
+      "bytes_received": 353399419,
+      "source_type": "rtmpsConn"
+    }
+  ],
+  "publish_transport": "verified RTMPS over loopback; RTSP/TCP read",
+  "expires_utc": "2026-10-05T16:46:27.437834+00:00",
+  "cleanup_verified": true,
+  "original_accounts_and_obs_source_preserved": true,
+  "vrchat_stable_playback": "pending user comparison",
+  "public_end_to_end": "Earlier RTMPS run decoded T01/T02. Current run public checks incomplete due TCP timeouts; server loopback all four passed."
+}

@@ -103,3 +103,5 @@ unset CIALLOCHAT_PUBLISH_URL
 项目延迟验收只测推流协议转发，不再要求切换播放器、调整缓存或反复秒表测试。测量方法与结果见 [服务端转发延迟](latency.md)。
 
 接入方式参考：[OBS 发布](https://mediamtx.org/docs/publish/obs-studio)、[MediaMTX 认证](https://mediamtx.org/docs/features/authentication)。
+
+固定 x264 / 1440p 的四路独立测试流及重建方法见 [四路播放对比](playback-comparison.md)。观看这些测试流不需要自己启动 OBS。
