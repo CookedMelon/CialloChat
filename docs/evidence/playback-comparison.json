@@ -418,5 +418,25 @@
     },
     "transport": "ordinary SCP/SFTP over separate fresh SSH connections; compression disabled",
     "random_file": true
+  },
+  "upload_short_window_interface_samples": {
+    "intervals": [
+      {
+        "seconds": 5.012,
+        "host_rx_mbps": 1.075,
+        "host_tx_mbps": 0.044
+      },
+      {
+        "seconds": 5.01,
+        "host_rx_mbps": 0.971,
+        "host_tx_mbps": 0.037
+      },
+      {
+        "seconds": 5.005,
+        "host_rx_mbps": 1.064,
+        "host_tx_mbps": 0.067
+      }
+    ],
+    "note": "Eth0 interface samples include all public traffic; these are not application-only SCP payload rates."
   }
 }
