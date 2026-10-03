@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-03",
+  "low_bitrate_synthetic_stream": {
+    "codec": "H264 High Level 5.1, yuv420p",
+    "width": 2560,
+    "height": 1440,
+    "fps": 60,
+    "video_kbps": 400,
+    "vcl_slices_per_frame": 1,
+    "audio_preserved": true,
+    "user_report": "VRChat displays moving test pattern",
+    "viewer_sample_seconds": 8.041,
+    "discarded_rtp_packets_before": 0,
+    "discarded_rtp_packets_after": 0
+  },
+  "lossless_stap_a_deaggregation_experiment": {
+    "source": "OBS live stream",
+    "transcoding": false,
+    "sampled_rtp_frames": 120,
+    "vcl_slices_per_frame": 16,
+    "stap_a_packets": 0,
+    "rtp_markers": 120,
+    "public_decoded_video_frames": 120,
+    "public_unique_video_frames": 113,
+    "public_decoded_audio_frames": 106,
+    "public_decoder_errors": "",
+    "viewer_sample_seconds": 8.048,
+    "discarded_rtp_packets_before": 0,
+    "discarded_rtp_packets_after": 0,
+    "user_report": "VRChat has no visible response, no stream ended message",
+    "result": "did not restore playback; temporary diagnostic only"
+  },
+  "obs_after_single_slice_restart": {
+    "codec": "H264 High Level 5.1, yuv420p",
+    "width": 2560,
+    "height": 1440,
+    "fps_declared": 60,
+    "sampled_h264_frames": 121,
+    "vcl_slices_per_frame": 1,
+    "max_num_reorder_frames": 0,
+    "independent_rtp_sample_frames": 120,
+    "independent_rtp_vcl_nals_per_frame": 1,
+    "user_report": "Black screen or stream ended",
+    "entered_rtsp_tcp_playback": true,
+    "whole_viewer_session_log": {
+      "first_overflow_utc": "2026-10-03 12:16:37",
+      "last_overflow_utc": "2026-10-03 12:18:20",
+      "overflow_warning_count": 38,
+      "discarded_rtp_packet_count": 2803
+    },
+    "earlier_short_sample": {
+      "seconds": 9.44,
+      "discarded_rtp_packets_before": 589,
+      "discarded_rtp_packets_after": 589
+    },
+    "later_publish_ingress_sample": {
+      "seconds": 12.093,
+      "ingress_kbps": 1640
+    },
+    "interpretation": "Single-slice configuration took effect but did not establish successful VRChat playback. A brief interval with unchanged discard counters did not represent the whole session; later repeated queue overflows are documented. Measurements cover different time windows."
+  },
+  "limits": [
+    "No media images, authentication secrets, viewer IP addresses or identifying client GUIDs are included.",
+    "Moving synthetic video in VRChat is confirmed only for the low-bitrate fixture.",
+    "Decoder success outside VRChat does not establish room playback success.",
+    "Direct-route comparison and restored OBS room playback remain pending."
+  ]
+}
