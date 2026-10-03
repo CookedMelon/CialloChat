@@ -73,7 +73,7 @@ rtspt://stream.example.com:8554/live/alice?read_key=<已编码的观看密钥>
 
 Windows 上 AVPro 的原生 RTSP 支持依赖 Media Foundation；Microsoft 文档规定，在未被应用或用户策略覆盖时，RTSP 默认绕过应用层代理，HTTP 默认使用浏览器代理设置。因此只开启系统 HTTP 代理，不能证明 RTSP 视频经过代理。TUN/VPN 路由和游戏加速器的底层连接重定向是另一层机制，仍可能接管原生 TCP 连接；按应用匹配且未排除视频目标的规则可能同时捕获游戏和视频连接。给梨与 FLYCLOUD 的具体捕获规则尚无本轮官方资料或客户端日志证明，不假定某一种客户端菜单、内核或默认行为。依据：[AVPro RTSP 支持](https://www.renderheads.com/content/docs/AVProVideo/articles/feature-streaming.html)、[Media Foundation 代理默认配置](https://learn.microsoft.com/en-us/windows/win32/medfound/proxy-support-for-network-sources)、[Windows 连接重定向](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/using-bind-or-connect-redirection)。
 
-本项目当前用户必须保持代理和加速器开启，并已确认 FLYCLOUD 开启 TUN/VPN/虚拟网卡模式。排查先读取代理连接日志中的目标地址、命中规则和出口；结合服务端的同一观看会话、握手状态和持续丢弃计数判断。不同公网出口只证明路径不同，TUN 开启只证明存在底层接管的条件，不能单凭这些事实认定某个软件正在转发这条流。若确认媒体连接被接管，按客户端实际能力为服务端 IP / 视频端口配置单独的直连或适用线路，保留游戏及其他应用的规则；不能保证在一层添加豁免就能绕过另一层。配置后的新会话需再次核验。所有 Windows 查询和配置由使用者完成，完整房间播放仍待验收。
+本项目当前用户必须保持代理和加速器开启，并已确认 FLYCLOUD 开启 TUN/VPN/虚拟网卡模式；该客户端没有可供用户查看的连接日志。排查优先使用服务端已有的连接来源地址、会话 ID、请求 User-Agent、观看路径、握手状态、TCP 确认字节增量、发送队列和 RTP 丢弃计数，不要求用户查找不存在的日志。来源地址与测试时间可区分本轮本地播放器和房间播放器对应的会话，但来源 IP 本身不是客户端程序身份；User-Agent 也只能作为辅助证据。不同公网出口证明出口不同，不能显示客户端内部命中了哪个软件或规则。TUN 开启也不能单凭这一事实认定某个软件正在转发这条流。后续若需要客户端分流，按其实际能力只调整服务端 IP / 视频端口的线路，保留游戏及其他应用的规则；不能保证在一层添加豁免就能绕过另一层。配置后的新会话需再次核验。所有 Windows 查询和配置由使用者完成，完整房间播放仍待验收。
 
 ## FFmpeg 发布
 
