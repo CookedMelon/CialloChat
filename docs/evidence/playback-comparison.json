@@ -338,5 +338,85 @@
     "200 Mbps peak plan is not a guaranteed sustained throughput commitment; that fact alone does not prove current cloud-side limiting.",
     "Server loopback decoding and live source readiness do not prove stable VRChat playback.",
     "A brief 1200-byte route MTU test did not materially improve throughput; the route was automatically removed and restoration verified."
-  ]
+  ],
+  "ordinary_large_file_transfer": {
+    "upload": {
+      "bytes": null,
+      "seconds": 192.558,
+      "complete": false,
+      "returncode": 1,
+      "average_mbps": 0.987,
+      "target_bytes": 67108864,
+      "bytes_received_at_server": 23761920,
+      "received_prefix_sha256_matches": true,
+      "note": "64 MiB target upload stopped after a sustained measurement; download covers the entire received file."
+    },
+    "download": {
+      "bytes": 23761920,
+      "seconds": 172.549,
+      "complete": true,
+      "sha256_matches": true,
+      "returncode": 0,
+      "average_mbps": 1.102,
+      "samples": [
+        {
+          "elapsed_seconds": 15.0,
+          "bytes": 1827840,
+          "interval_mbps": 0.975
+        },
+        {
+          "elapsed_seconds": 30.0,
+          "bytes": 3916800,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 45.0,
+          "bytes": 6005760,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 60.0,
+          "bytes": 8094720,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 75.0,
+          "bytes": 10183680,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 90.0,
+          "bytes": 12272640,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 105.0,
+          "bytes": 14361600,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 120.0,
+          "bytes": 16450560,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 135.0,
+          "bytes": 18539520,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 150.0,
+          "bytes": 20628480,
+          "interval_mbps": 1.114
+        },
+        {
+          "elapsed_seconds": 165.0,
+          "bytes": 22717440,
+          "interval_mbps": 1.114
+        }
+      ]
+    },
+    "transport": "ordinary SCP/SFTP over separate fresh SSH connections; compression disabled",
+    "random_file": true
+  }
 }
