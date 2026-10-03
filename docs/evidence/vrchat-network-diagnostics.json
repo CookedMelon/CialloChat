@@ -96,11 +96,53 @@
     },
     "next_method": "Use server-side peer addresses, request metadata, session counters and TCP delivery measurements with both networking clients enabled; do not require client connection logs"
   },
+  "direct_route_followup": {
+    "date_utc": "2026-10-03",
+    "viewer_started_utc": "2026-10-03T15:19:30Z",
+    "viewer_egress_changed_to_previous_local_player_egress": true,
+    "user_identified_previous_route_as": "FLYCLOUD proxy",
+    "user_report": "Real OBS video displays with about 1 second latency, but intermittently freezes and sometimes remains blank after reload",
+    "observed_tcp_rtt_ms": 24.885,
+    "observed_tcp_send_queue_bytes": 0,
+    "observed_viewer_discarded_rtp_packets": 0,
+    "source_sample": {
+      "decoded_frames": 900,
+      "unique_frames": 840,
+      "decoder_errors": "",
+      "sampled_vcl_slice_headers": 31,
+      "sampled_frame_starts": 31,
+      "max_first_mb_in_slice": 0,
+      "max_num_reorder_frames": 0,
+      "video_pts_span_seconds": 19.9731,
+      "max_video_pts_step_seconds": 0.0221,
+      "negative_video_pts_steps": 0,
+      "video_pts_steps_over_100ms": 0,
+      "keyframe_intervals_seconds": [4.1721, 4.167, 4.167, 4.166]
+    },
+    "first_frozen_session": {
+      "state_observed": "idle",
+      "outbound_rtp_packets_remained_at": 55938,
+      "user_pressed_pause_or_stop": false,
+      "captured_after_state_change": "OPTIONS keepalive returned 200; no PLAY observed in that capture window",
+      "limit": "Capture began after the state change; the exact preceding control request and reason are not captured"
+    },
+    "subsequent_reload": {
+      "describe_status": 200,
+      "video_tcp_setup_status": 200,
+      "audio_tcp_setup_status": 200,
+      "play_status": 200,
+      "rtp_packets_continued": true,
+      "discarded_rtp_packets": 0,
+      "user_report": "No visible playback after loading"
+    },
+    "next_check": "User asked to set OBS keyframe interval to 1 second and restart publishing; actual output and room stability still require verification",
+    "result": "Direct routing and basic real-stream playback confirmed; stable playback remains unresolved"
+  },
   "limits": [
     "No media images, authentication secrets, viewer IP addresses or identifying client GUIDs are included.",
-    "Moving synthetic video in VRChat is confirmed only for the low-bitrate fixture.",
+    "Moving synthetic video is confirmed only for the low-bitrate fixture; real OBS playback was subsequently confirmed after the viewer egress changed, but remains intermittent.",
     "Decoder success outside VRChat does not establish room playback success.",
     "Different egress addresses do not by themselves identify which client intercepts a stream.",
-    "Route attribution with both networking clients enabled and stable OBS room playback remain pending."
+    "The user identified the previous proxy route and the server confirmed the viewer egress change; stable OBS room playback remains pending."
   ]
 }
