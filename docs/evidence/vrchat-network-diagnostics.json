@@ -59,10 +59,38 @@
     },
     "interpretation": "Single-slice configuration took effect but did not establish successful VRChat playback. A brief interval with unchanged discard counters did not represent the whole session; later repeated queue overflows are documented. Measurements cover different time windows."
   },
+  "brief_picture_then_freeze": {
+    "user_report": "A picture appeared briefly, then froze again",
+    "same_viewer_sample_seconds": 10.091,
+    "ingress_kbps": 1698,
+    "discarded_rtp_packets_before": 7745,
+    "discarded_rtp_packets_after": 8723,
+    "tcp_bytes_acked_before": 23452789,
+    "tcp_bytes_acked_after": 24657525,
+    "tcp_acknowledged_mbps": 0.955,
+    "tcp_send_queue_bytes_before": 524176,
+    "tcp_send_queue_bytes_after": 622640,
+    "rtsp_replay_responses": {
+      "describe": 200,
+      "video_tcp_setup": 200,
+      "audio_tcp_setup": 200,
+      "play": 200
+    }
+  },
+  "routing_investigation": {
+    "user_constraint": "Both proxy and game accelerator must remain enabled",
+    "user_confirmed_proxy_mode": "TUN/VPN/virtual adapter enabled in FLYCLOUD",
+    "media_foundation_default": "RTSP bypasses application-layer proxy unless application or user policy overrides defaults; this does not bypass TUN/VPN routing or lower-level connection redirection",
+    "proxy_defaults_source": "https://learn.microsoft.com/en-us/windows/win32/medfound/proxy-support-for-network-sources",
+    "connection_redirection_source": "https://learn.microsoft.com/en-us/windows-hardware/drivers/network/using-bind-or-connect-redirection",
+    "responsible_client_or_rule": "unconfirmed",
+    "next_method": "Read active client connection logs and routing mode while keeping both clients enabled; verify any targeted rule against the resulting viewer session"
+  },
   "limits": [
     "No media images, authentication secrets, viewer IP addresses or identifying client GUIDs are included.",
     "Moving synthetic video in VRChat is confirmed only for the low-bitrate fixture.",
     "Decoder success outside VRChat does not establish room playback success.",
-    "Direct-route comparison and restored OBS room playback remain pending."
+    "Different egress addresses do not by themselves identify which client intercepts a stream.",
+    "Route attribution with both networking clients enabled and stable OBS room playback remain pending."
   ]
 }
