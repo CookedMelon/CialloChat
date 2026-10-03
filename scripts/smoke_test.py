@@ -282,7 +282,7 @@ class Harness:
                                  '-show_streams',url],capture_output=True,timeout=12)
         assert result.returncode != 0 and b'401' in result.stderr, 'URL watch key rejection unproven'
 
-    def read(self, username, seconds=3):
+    def read(self, username, seconds=3, check_account_color=True):
         url = self.read_url(username)
         probe = subprocess.run([self.args.ffprobe, '-v', 'error', '-rtsp_transport', 'tcp', '-show_entries',
                                 'stream=codec_name,codec_type', '-of', 'json', url], capture_output=True, timeout=12)
@@ -296,7 +296,8 @@ class Harness:
                                 '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], capture_output=True, timeout=12)
         assert frame.returncode == 0 and len(frame.stdout) == 3, 'missing RGB sample'
         r,g,b = frame.stdout
-        assert (r > 200 and b < 50) if username == 'alice' else (b > 200 and r < 50), (r,g,b)
+        if check_account_color:
+            assert (r > 200 and b < 50) if username == 'alice' else (b > 200 and r < 50), (r,g,b)
 
     def rejected_read(self, username='alice', key=None, identity=None, anonymous=False, removed=False):
         host = f"127.0.0.1:{self.service.settings['rtsp_port']}"
@@ -389,7 +390,9 @@ def profile_validation(args):
                 return next(x['inboundBytes'] for x in h.service.api('rtmps/conns/list?itemsPerPage=10000')['items'] if x['id']==source)
             baseline, start = counter(), time.monotonic()
             report['stage'] = 'decode and ingress measurement'
-            h.read('bob', 8)
+            # External fixtures can contain any picture; the red/blue check is
+            # only an isolation assertion for the harness-generated sources.
+            h.read('bob', 8, check_account_color=not args.profile_input)
             rate = (counter()-baseline)*8/(time.monotonic()-start)/1000
             report['actual_ingress_kbps'] = round(rate)
             assert 30000 < rate < 45000, f'unexpected measured ingress rate: {rate:.0f} Kbps'

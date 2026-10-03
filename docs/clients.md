@@ -43,6 +43,20 @@ unset CIALLOCHAT_READ_URL
 
 2K 屏幕建议使用 2560×1440、H.264、60 fps、CBR 34000 Kbps，AAC 192 Kbps。服务端每路默认 45000 Kbps，持续超限会断开发布连接；完整 OBS 参数和断连条件见 [码率配置](bitrate.md)。
 
+H.264 编码应优先使用**每帧一个 slice（编码切片）**。本轮真实故障中，PotPlayer 完整播放，而 VRChat 只显示顶部一条且冻结；码流每帧有 16 个 slice，第一片覆盖顶部 96 像素，当前 VRChat 连接的服务端 RTP 丢弃数为 0。这使多 slice 解码兼容性成为优先验证项，尚不能把它标为已由 VRChat 实测确认的根因。
+
+OBS 使用 x264 时，在“设置 → 输出 → 输出模式：高级 → 直播 → x264 选项”填入以下参数（各项以空格分隔）：
+
+```text
+sliced-threads=0 slices=1 slice-max-size=0 slice-max-mbs=0 bframes=0 rc-lookahead=0 sync-lookahead=0
+```
+
+可以保留 `zerolatency` 调优，但必须显式覆盖它默认开启的 `sliced-threads`。停推后修改，再开始推流，并在房间重新加载观看 URL，使播放器获取新的 SPS/PPS。保持 1440p、60 fps 和原码率，先只验证切片变化；不要同时改 Profile、分辨率和缓存。上述参数只适用于 x264，硬件编码器需要其对应的 slice 设置。
+
+`slices=1` 仍允许一个编码切片拆成多个 RTP 网络包，不是把整帧塞进一个大包。服务器直接转发压缩视频，不能通过扩大网络包或更改 SDP 将 16 个编码切片无损变成一个；重新编码会带来额外处理成本和延迟。关闭切片线程后，x264 使用帧线程，编码负载和编码延迟需要重新确认，不能保证与原配置相同。
+
+参数行为依据 [x264 的 zerolatency 实现](https://github.com/mirror/x264/blob/master/common/base.c) 和 [OBS 的 x264 自定义参数实现](https://github.com/obsproject/obs-studio/blob/master/plugins/obs-x264/obs-x264.c)。这里不将普通播放器解码成功等同于 VRChat 兼容验收完成。
+
 房间播放器切换到直播 / AVPro 模式，粘贴 CLI 交付的完整 `vrchat_read_url`：
 
 ```text
@@ -64,6 +78,7 @@ read -rs -p '推流 URL: ' CIALLOCHAT_PUBLISH_URL; printf '\n'
 ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 \
   -re -f lavfi -i sine=frequency=440:sample_rate=48000 \
   -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 \
+  -x264-params sliced-threads=0:slices=1:slice-max-size=0:slice-max-mbs=0 \
   -pix_fmt yuv420p -b:v 2M -g 30 -c:a aac -b:a 128k \
   -f flv "$CIALLOCHAT_PUBLISH_URL"
 unset CIALLOCHAT_PUBLISH_URL

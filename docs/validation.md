@@ -28,6 +28,14 @@ URL 观看密钥与码率上限版本：管理及 CLI 的 **45 项测试全部�
 
 另通过真实 1440p/60 fps 高码率验收：预编码 H.264 34000 Kbps + AAC 192 Kbps，通过验证 TLS 的 RTMPS 发布、无 Basic 挑战的 URL 观看，经 RTSP/TCP 实际解码音视频，持续在线且未触发默认 45000 Kbps 上限。实际接收码率见 [高码率报告](evidence/url-key-cap-profile.json)。合成画面证明传输与配置兼容，不代表所有真实桌面内容的主观画质。
 
+## VRChat 编码兼容性排查
+
+用户确认同一码流在 PotPlayer 完整播放，但 VRChat 只显示顶部一条且冻结。实际直播的 H.264 为 High、Level 5.1、8-bit yuv420p、2560×1440、逐行扫描；SPS 声明无重排帧。采样 77 个画面，每个都有 16 个编码 slice，第一片覆盖顶部 96 像素。云端回环和公网 FFmpeg 均解码出持续变化的完整画面，未报解码错误；观察时当前 VRChat 会话的服务端 RTP 丢弃计数前后均为 0。更早的会话存在慢读者丢弃，不能用当前采样否定历史拥塞，也不能直接用历史丢弃解释本次裁切。
+
+单切片编码是下一步控制变量验证：保持 High / Level 5.1、1440p/60 fps、34 Mbps 和无 B 帧，只覆盖切片线程与切片限制。已修正 [客户端接入](clients.md) 的 x264 / FFmpeg 参数；`zerolatency` 会默认开启切片线程，原示例未覆盖该行为。原始画面不写入诊断报告，报告仅保留头部字段和解码计数：[切片元数据](evidence/vrchat-h264-slices.json)。VRChat 的实际恢复结果仍待用户验证，不标为已修复。
+
+另生成动态合成画面的单切片 High / Level 5.1 素材，240 帧的 `first_mb_in_slice` 均为 0；通过隔离 Docker Compose 的 RTMPS 发布和 RTSP/TCP 音视频解码，实际接收约 34296 Kbps，未触发 45000 Kbps 上限，首次 DESCRIBE 没有 Basic 挑战。[单切片传输报告](evidence/vrchat-single-slice-profile.json) 证明这组编码参数能通过服务传输，不能替代 VRChat 房间验收。高码率验证脚本此前对外部素材也断言纯蓝画面，导致动态合成画面测试误报；现仅对内部红/蓝素材检查颜色隔离，外部素材仍检查实际解码和 RGB 输出。
+
 ## 环境与部署
 
 开发实例为 Ubuntu 26.04 WSL amd64，系统 Python 3.14.4，FFmpeg 8.0.1 使用项目内提取的依赖。最新 Compose 验证在 Ubuntu 24.04 部署服务器上执行，Docker 29.8.2、Compose 5.6.0、Python 3.12.3、FFmpeg 6.1。本轮没有可用的本机 Docker，未调整 Windows、Docker Desktop、WSL 集成、用户组或 socket 权限。媒体镜像固定为 MediaMTX 1.21.1，digest 见 [版本锁](../config/version.json)。

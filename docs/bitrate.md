@@ -13,6 +13,7 @@
 | 关键帧间隔 | 1 秒 |
 | B 帧 | 0 |
 | Look-ahead | 关闭（编码器提供该项时） |
+| H.264 编码切片 | VRChat 接入优先每帧 1 个 slice；x264 参数见 [客户端接入](clients.md) |
 
 YouTube 当前 H.264 直播建议为 1440p/60 fps 34 Mbps、1440p/30 fps 21 Mbps，可作为高画质输入的参考。这里使用这些码率，关键帧和 B 帧另按低延迟目标选择，未照搬平台的全部编码参数。[官方码率表](https://support.google.com/youtube/answer/2853702?hl=en)
 
