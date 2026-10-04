@@ -37,7 +37,7 @@ class CLI(unittest.TestCase):
         self.assertNotIn('argon2',listed)
 
     def test_publish_limit_default_update_and_disabled_limit_rejected(self):
-        self.assertEqual(json.loads(self.run_cli('limits'))['publish_limit_kbps'], 45000)
+        self.assertEqual(json.loads(self.run_cli('limits'))['publish_limit_kbps'], 4000)
         self.assertEqual(json.loads(self.run_cli('limits', '--publish-kbps', '32000'))['publish_limit_kbps'], 32000)
         before = (self.runtime/'settings.json').read_bytes()
         self.run_cli('limits', '--publish-kbps', '0', expect=1)
@@ -53,7 +53,7 @@ class CLI(unittest.TestCase):
         self.assertEqual(parse_qs(urlparse(credentials['publish_url']).query)['pass'],[value])
         self.assertEqual(parse_qs(urlparse(credentials['read_url']).query)['read_key'], [credentials['read_key']])
         self.assertIsNone(urlparse(credentials['read_url']).username)
-        self.assertEqual(credentials['vrchat_read_url'].split('://',1)[0], 'rtspt')
+        self.assertEqual(credentials['vrchat_read_url'].split('://',1)[0], 'rtsp')
         read=json.loads(self.run_cli('user','credentials','alice','--password-stdin',input=value+'\n'))
         self.assertEqual(read['publish_url'],credentials['publish_url'])
         self.assertNotIn('read_url',read)

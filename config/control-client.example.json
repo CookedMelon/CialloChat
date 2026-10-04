@@ -1,0 +1,5 @@
+{
+  "host": "chat.v50to.cc",
+  "port": 15347,
+  "password": "REPLACE_WITH_THE_SAME_RANDOM_SECRET_AS_SERVER"
+}

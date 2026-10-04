@@ -14,11 +14,13 @@ output.mkdir(exist_ok=True)
 archive=output/'ciallochat-dual-key.tar.gz'
 files=[]
 for name in ('README.md','PROJECT_PLAN.md','setup.sh','streamctl','requirements.lock',
-             'compose.yaml','compose.local.yaml','.gitignore','.dockerignore','docker','config','docs','scripts','src','tests','examples'):
+             'compose.yaml','compose.local.yaml','.gitignore','.dockerignore','docker','config','docs','scripts','control-scripts','src','tests','examples'):
     source=root/name
     candidates=source.rglob('*') if source.is_dir() else [source]
     files.extend(p for p in candidates if p.is_file() and not p.is_symlink() and
                  '__pycache__' not in p.parts and p.suffix not in ('.pyc','.key','.crt','.pem','.csr','.log')
+                 and (p.relative_to(root).parts[0] != 'config' or p.name.endswith('.example.json')
+                      or p.name in ('version.json', 'mediamtx.base.yml'))
                  and not p.name.endswith('-credentials.json'))
 files.sort()
 manifest=''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+str(p.relative_to(root))+'\n' for p in files).encode()

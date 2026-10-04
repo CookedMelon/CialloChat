@@ -8,5 +8,10 @@ COPY requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir --only-binary=:all: -r /app/requirements.lock
 COPY src/streamctl/authserver.py /app/authserver.py
 COPY src/streamctl/watchdog.py /app/watchdog.py
+COPY src/streamctl/leases.py /app/leases.py
+COPY src/streamctl/relayauth.py /app/relayauth.py
+COPY src/streamctl/testquota.py /app/testquota.py
 USER 65532:65532
 ENTRYPOINT ["python", "/app/authserver.py"]
+
+COPY src/streamctl/traffic.py /app/traffic.py

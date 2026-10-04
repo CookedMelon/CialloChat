@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MODE=local
+BACKEND=docker
 CHECK=0
 VALIDATION=0
 STAGE=arguments
@@ -10,13 +11,15 @@ trap 'echo "CialloChat setup 失败阶段: $STAGE；修复后重复同一命令�
 while (($#)); do
   case "$1" in
     --mode) MODE="${2:?missing mode}"; shift 2 ;;
+    --backend) BACKEND="${2:?missing backend}"; shift 2 ;;
     --check) CHECK=1; shift ;;
     --with-validation) VALIDATION=1; shift ;;
-    --help) echo './setup.sh [--mode local|production] [--check] [--with-validation]'; exit 0 ;;
+    --help) echo './setup.sh [--mode local|production] [--backend docker|systemd] [--check] [--with-validation]'; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
 [[ "$MODE" == local || "$MODE" == production ]]
+[[ "$BACKEND" == docker || "$BACKEND" == systemd ]]
 STAGE=environment
 source /etc/os-release
 [[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo '支持 Ubuntu 24.04/26.04' >&2; exit 1; }
@@ -41,6 +44,7 @@ if ((${#packages[@]})); then
   run_root apt-get update
   run_root apt-get install -y "${packages[@]}"
 fi
+if [[ "$BACKEND" == docker ]]; then
 STAGE=docker
 if ! docker_message="$(timeout 15 docker info 2>&1)"; then
   if [[ "$docker_message" == *"permission denied"* ]]; then
@@ -88,6 +92,7 @@ import re,sys
 v=tuple(map(int,re.match(r'(\d+)\.(\d+)\.(\d+)',sys.argv[1]).groups()))
 if v < (2,24,4): raise SystemExit('Docker Compose 需要 >= 2.24.4')
 PY
+fi
 STAGE=python-venv
 cd "$ROOT"
 /usr/bin/python3 -c 'import sys; assert sys.version_info >= (3,12)'
@@ -96,6 +101,44 @@ if [[ ! -x .venv/bin/python ]]; then /usr/bin/python3 -m venv .venv; fi
 .venv/bin/python -m pip install -r requirements.lock
 STAGE=initialization
 ./streamctl init --mode "$MODE"
+if [[ "$BACKEND" == systemd ]]; then
+  STAGE=native-binary
+  PYTHONPATH="$ROOT/src" .venv/bin/python - <<'PY'
+import hashlib, io, json, os
+from pathlib import Path
+import shutil, tarfile, urllib.request
+from streamctl.config import Store, VERSION, atomic_write, dump, render
+from streamctl.service import Service
+root=Path.cwd(); path=root/'runtime/bin/mediamtx'
+if not path.exists():
+    path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    cached=root/'runtime/tools/mediamtx'
+    if cached.exists():
+        shutil.copy2(cached,path)
+    else:
+        import platform
+        if platform.machine() != 'x86_64':
+            raise SystemExit('请手动安装已校验的锁定版本原生 MediaMTX 到 runtime/bin/mediamtx')
+        url=f'https://github.com/bluenviron/mediamtx/releases/download/v{VERSION["mediamtx"]}/mediamtx_v{VERSION["mediamtx"]}_linux_amd64.tar.gz'
+        with urllib.request.urlopen(url, timeout=30) as response: body=response.read(64*1024*1024)
+        if hashlib.sha256(body).hexdigest()!=VERSION['linux_amd64_archive_sha256']:
+            raise SystemExit('MediaMTX 下载 SHA256 与版本锁不符')
+        with tarfile.open(fileobj=io.BytesIO(body),mode='r:gz') as archive:
+            atomic_write(path,archive.extractfile('mediamtx').read(),mode=0o700)
+    path.chmod(0o700)
+store=Store(); settings,accounts,control=store.load()
+if settings.get('service_backend','docker')!='systemd':
+    if Service(store).running(): raise SystemExit('请先停止现有服务再切换后端')
+    settings.update(service_backend='systemd',native_runtime=str(store.path),
+                    systemd_scope='system' if os.geteuid()==0 else 'user')
+    atomic_write(store.path/'settings.json',dump(settings))
+    atomic_write(store.path/'mediamtx/mediamtx.yml',render(settings,accounts,control))
+PY
+  ./streamctl config-check
+  ./streamctl doctor
+  echo '原生依赖准备完成。本地完整服务：.venv/bin/python scripts/deploy-local.py'
+  exit 0
+fi
 STAGE=image
 image="$(.venv/bin/python -c 'import json; print(json.load(open("config/version.json"))["image"])')"
 if docker image inspect "$image" >/dev/null 2>&1; then

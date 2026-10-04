@@ -49,7 +49,7 @@ class BitrateWatchdog(unittest.TestCase):
             settings.pop('publish_limit_kbps')
             write_watchdog_config(store, settings, control)
             import json
-            self.assertEqual(json.loads((store.path/'watchdog/config.json').read_text())['publish_limit_kbps'], 45000)
+            self.assertEqual(json.loads((store.path/'watchdog/config.json').read_text())['publish_limit_kbps'], 4000)
 
     def test_live_limit_changes_are_atomic_and_other_live_setting_changes_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

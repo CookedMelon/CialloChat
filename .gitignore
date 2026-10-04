@@ -12,6 +12,12 @@ __pycache__/
 accounts.json
 settings.json
 control.json
+/config/smtp.json
+/config/control-client.json
+/config/control-server.json
+/config/*.json
+!/config/*.example.json
+!/config/version.json
 /imports/
 dist/
 .env.*

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "mode": "production",
+  "service_backend": "systemd",
+  "systemd_scope": "system",
+  "hostname": "chat.v50to.cc",
+  "bind_address": "0.0.0.0",
+  "native_runtime": "/opt/ciallochat/runtime",
+  "rtmp_port": 1935,
+  "rtmps_port": 1936,
+  "rtsp_port": 8554,
+  "rtsp_internal_port": 18554,
+  "api_port": 9997,
+  "auth_port": 9000,
+  "rtsp_buffer_ms": 1000,
+  "publish_limit_kbps": 4000,
+  "control_enabled": true,
+  "native_connection_guard": true,
+  "traffic_enabled": true,
+  "certificate": "certs/server.crt",
+  "private_key": "certs/server.key",
+  "test_video_enabled": true
+}

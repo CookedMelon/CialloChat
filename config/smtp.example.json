@@ -1,0 +1,12 @@
+{
+  "host": "smtp.example.com",
+  "port": 465,
+  "security": "ssl",
+  "username": "sender@example.com",
+  "password": "填写邮箱的SMTP授权码",
+  "from": "sender@example.com",
+  "recipients": {
+    "alice": "recipient@example.com"
+  },
+  "admin_recipient": "administrator@example.com"
+}

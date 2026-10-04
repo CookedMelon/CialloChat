@@ -6,3 +6,7 @@
 !src/streamctl/
 !src/streamctl/authserver.py
 !src/streamctl/watchdog.py
+!src/streamctl/leases.py
+!src/streamctl/relayauth.py
+!src/streamctl/testquota.py
+!src/streamctl/traffic.py

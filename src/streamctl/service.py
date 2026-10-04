@@ -18,6 +18,9 @@ class Service:
         self.control = control or store.read("control.json")
 
     def compose(self, args, capture=True):
+        if self.settings.get('service_backend', 'docker') == 'systemd':
+            from .native import compose
+            return compose(self, args, capture)
         s = self.settings
         env = os.environ.copy()
         env.update(CIALLOCHAT_RUNTIME=str(self.store.path), CIALLOCHAT_CERT_DIR=str(self.store.path / "certs"),
@@ -35,6 +38,9 @@ class Service:
 
     def running(self):
         try:
+            if self.settings.get('service_backend', 'docker') == 'systemd':
+                from .native import running
+                return running(self.settings)
             return bool(self.compose(["ps", "--status", "running", "-q", "mediamtx"]).strip())
         except (RuntimeError, FileNotFoundError):
             if (self.store.path / "active.json").exists():
@@ -108,8 +114,14 @@ class Service:
     def up(self):
         if self.settings["mode"] == "production":
             check_tls(self.store, self.settings)
-        subprocess.run(['bash', str(ROOT / 'scripts/build-auth.sh')], check=True)
         write_watchdog_config(self.store, self.settings, self.control)
+        if self.settings.get('service_backend', 'docker') == 'systemd':
+            from .native import up
+            up(self)
+            atomic_write(self.store.path / 'active.json', dump({'mode': self.settings['mode']}))
+            self.wait_loaded((self.store.path/'mediamtx/mediamtx.yml').read_text())
+            return
+        subprocess.run(['bash', str(ROOT / 'scripts/build-auth.sh')], check=True)
         self.compose(["config", "--quiet"])
         atomic_write(self.store.path / "active.json", dump({"mode": self.settings["mode"]}))
         self.compose(["up", "-d", "--wait", "--wait-timeout", "45"])
@@ -143,7 +155,11 @@ class Service:
                 time.sleep(.2)
 
     def down(self):
-        self.compose(["down"])
+        if self.settings.get('service_backend', 'docker') == 'systemd':
+            from .native import down
+            down(self.settings)
+        else:
+            self.compose(["down"])
         (self.store.path / "active.json").unlink(missing_ok=True)
 
 

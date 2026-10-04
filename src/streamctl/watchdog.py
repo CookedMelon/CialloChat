@@ -3,15 +3,30 @@ import argparse
 import base64
 from collections import deque
 import json
+import re
 from pathlib import Path
+import sqlite3
+import signal
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import yaml
+
+try:
+    from .leases import Leases, publisher_policies, validate_mail, send_notice
+except ImportError:
+    from leases import Leases, publisher_policies, validate_mail, send_notice
 
 WINDOW_SECONDS = 5
 CONSECUTIVE_SAMPLES = 2
 POLL_SECONDS = 1
+
+try:
+    from .traffic import TrafficSampler, TrafficStore
+except ImportError:
+    from traffic import TrafficSampler, TrafficStore
 
 
 class RateLimiter:
@@ -48,11 +63,51 @@ class RateLimiter:
 
 
 class Watchdog:
-    def __init__(self, config, api_url=None):
+    def __init__(self, config, api_url=None, leases=None, policy=None, mail=None, traffic=None):
         self.config = Path(config)
         self.api_override = api_url
         self.limiter = RateLimiter()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        root = self.config.parent.parent
+        self.leases = Leases(leases or root/'leases/leases.sqlite3')
+        self.policy = Path(policy or root/'mediamtx/mediamtx.yml')
+        self.mail = Path(mail or root/'notifications/smtp.json')
+        self.traffic_path = Path(traffic or root/'traffic/traffic.sqlite3')
+        self.traffic = None
+        self.traffic_failed = False
+
+    def notifications(self):
+        if not self.mail.exists():
+            return
+        config = validate_mail(json.loads(self.mail.read_text()))
+        policies = publisher_policies(yaml.safe_load(self.policy.read_text()))
+        settings = json.loads(self.config.read_text())
+        publish_base = settings['publish_base']
+        with self.leases.connection() as db:
+            vault = {r['username']: dict(r) for r in db.execute('SELECT * FROM credential_vault')}
+        for username, hashed in policies.items():
+            record = vault.get(username)
+            if record and record['policy_hash'] == hashed:
+                config['recipients'][username] = record['email']
+            if username not in config['recipients']:
+                continue
+            notice = self.leases.prepare_notice(username, hashed)
+            if notice:
+                if record and record['policy_hash'] == hashed:
+                    notice.update(read_key=record['read_key'], email=record['email'])
+                send_notice(config, notice, publish_base, settings.get('read_base'),
+                            test_url=settings.get('test_url'))
+                self.leases.delivered(notice)
+                print('publisher renewal email sent; credentials omitted', flush=True)
+
+    def notification_worker(self):
+        while True:
+            try:
+                self.notifications()
+            except Exception:
+                # SMTP faults must never delay or disable disconnect enforcement.
+                print('publisher renewal email failed; retry scheduled; details omitted', flush=True)
+            time.sleep(5)
 
     def api(self, config, endpoint, method='GET'):
         token = base64.b64encode((config['username'] + ':' + config['password']).encode()).decode()
@@ -77,7 +132,29 @@ class Watchdog:
                     continue
                 raise
             publishers.extend(dict(item, kind=kind) for item in items)
-        for item, rate in self.limiter.sample(publishers, time.monotonic(), limit):
+        policies = publisher_policies(yaml.safe_load(self.policy.read_text()))
+        def test_source(item):
+            return (config.get('test_video_enabled', False) and item['kind']=='rtsp/sessions'
+                    and re.fullmatch(r'test/[a-f0-9]{32}', item.get('path','')))
+        if config.get('traffic_enabled', False):
+            try:
+                if self.traffic is None:
+                    self.traffic = TrafficSampler(TrafficStore(self.traffic_path))
+                counted = [dict(item, path='live/__test__') if test_source(item) else item for item in publishers]
+                users = set(policies) | ({'__test__'} if config.get('test_video_enabled') else set())
+                self.traffic.sample(counted, users)
+                self.traffic_failed = False
+            except Exception:
+                # Accounting must not disable stream expiry or bitrate checks.
+                if not self.traffic_failed:
+                    print('traffic checkpoint failed; accounting may be incomplete; details omitted', flush=True)
+                self.traffic_failed = True
+        invalid = self.leases.invalid_sessions([item for item in publishers if not test_source(item)], policies)
+        rates = self.limiter.sample(publishers, time.monotonic(), limit)
+        reasons = {item['id']: (item, 'publisher credential expired or revoked') for item in invalid}
+        reasons.update({item['id']: (item, f'publish bitrate limit exceeded: '
+                        f'average_kbps={rate:.0f} limit_kbps={limit}') for item, rate in rates})
+        for item, reason in reasons.values():
             try:
                 self.api(config, item['kind'] + '/kick/' + urllib.parse.quote(item['id'], safe=''), 'POST')
             except urllib.error.HTTPError as exc:
@@ -85,32 +162,42 @@ class Watchdog:
                     continue
                 raise
             # No URLs, passwords or remote addresses in operational logs.
-            print(f'publish bitrate limit exceeded: path={item.get("path", "")} '
+            print(f'{reason}: path={item.get("path", "")} '
                   f'protocol={item["kind"].split("/")[0]} '
-                  f'average_kbps={rate:.0f} limit_kbps={limit}; disconnected', flush=True)
+                  '; disconnected', flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='/watchdog/config.json')
     parser.add_argument('--api-url')
+    parser.add_argument('--leases')
+    parser.add_argument('--policy')
+    parser.add_argument('--mail')
+    parser.add_argument('--traffic')
     parser.add_argument('--health-file', default='/tmp/watchdog-health')
     args = parser.parse_args()
-    watchdog = Watchdog(args.config, args.api_url)
+    watchdog = Watchdog(args.config, args.api_url, args.leases, args.policy, args.mail, args.traffic)
+    threading.Thread(target=watchdog.notification_worker, daemon=True).start()
     failures = 0
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
     print('CialloChat bitrate watchdog ready', flush=True)
-    while True:
+    while not stopped.is_set():
         start = time.monotonic()
         try:
             watchdog.tick()
             Path(args.health_file).touch()
             failures = 0
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, yaml.YAMLError):
             failures += 1
             print('bitrate watchdog check failed; credentials and responses omitted', flush=True)
             if failures >= 3:
                 raise SystemExit(1)  # Compose restarts; health never reports success on failure.
-        time.sleep(max(0, POLL_SECONDS - (time.monotonic() - start)))
+        stopped.wait(max(0, POLL_SECONDS - (time.monotonic() - start)))
+    if watchdog.traffic is not None:
+        watchdog.traffic.flush()
 
 
 if __name__ == '__main__':

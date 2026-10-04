@@ -3,6 +3,7 @@ import copy
 import getpass
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import urllib.parse
@@ -69,6 +70,11 @@ def parser():
     r = sub.add_parser('restore'); r.add_argument('file'); r.add_argument('--migrate-credentials-file')
     d = sub.add_parser('doctor'); d.add_argument('--with-validation', action='store_true')
     sub.add_parser('certificate-reload')
+    sub.add_parser('sessions')
+    mail = sub.add_parser('mail').add_subparsers(dest='action', required=True)
+    mail.add_parser('status')
+    configure = mail.add_parser('configure')
+    configure.add_argument('file', help='权限 600 的 SMTP JSON；不发送测试邮件')
     limits = sub.add_parser('limits')
     limits.add_argument('--publish-kbps', type=int, help='每路推流最大平均 Kbps，运行中可调整')
     return p
@@ -204,6 +210,10 @@ def execute(args):
                 users.remove(u); revoke.append(u['stream_path']); states = ('publish','read')
             u['updated_at'] = timestamp()
             commit(store, accounts, revoke=revoke, service=service, revoke_states=states)
+            if args.action == 'delete':
+                from .leases import Leases
+                with Leases(store.path/'leases/leases.sqlite3').connection() as db:
+                    db.execute('DELETE FROM login_history WHERE username=?', (args.username,))
             if args.action in ('reset-password', 'reset-publish-key'):
                 print_credentials(settings, args.username, value)
             elif args.action == 'reset-read-key':
@@ -215,9 +225,27 @@ def execute(args):
                 settings = copy.deepcopy(settings)
                 settings['publish_limit_kbps'] = args.publish_kbps
                 commit(store, settings=settings, service=service)
-            print(dump({'publish_limit_kbps': settings.get('publish_limit_kbps', 45000),
+            print(dump({'publish_limit_kbps': settings.get('publish_limit_kbps', 4000),
+                        'publish_session_seconds': 7200, 'renewal_notice_seconds': 600,
                         'scope': 'per publisher; audio, video and ingress protocol bytes',
                         'window_seconds': 5, 'poll_seconds': 1, 'consecutive_samples': 2}), end='')
+        elif args.command == 'sessions':
+            from .leases import Leases
+            print(dump(Leases(store.path/'leases/leases.sqlite3').statuses()), end='')
+        elif args.command == 'mail':
+            from .leases import validate_mail
+            target = store.path/'notifications/smtp.json'
+            if args.action == 'configure':
+                source = Path(args.file)
+                if source.stat().st_mode & 0o077 or source.stat().st_size > 16384:
+                    raise ValueError('SMTP 配置文件需权限 600，且不超过 16 KiB')
+                config = validate_mail(json.loads(source.read_text()))
+                atomic_write(target, dump(config))
+                print('SMTP 配置已保存；临近到期时发送续期邮件。')
+            else:
+                config = validate_mail(json.loads(target.read_text())) if target.exists() else None
+                print(dump({'configured': config is not None,
+                            'users': sorted(config['recipients']) if config else []}), end='')
         elif args.command in ('up', 'apply'):
             changed = copy.deepcopy(settings)
             if args.mode:
@@ -236,7 +264,13 @@ def execute(args):
             print('服务已停止。')
         elif args.command == 'status':
             running = service.running()
-            result = {'container_running': running, 'api_available': False, 'paths': []}
+            result = {'container_running': running and settings.get('service_backend', 'docker') == 'docker', 'service_running': running,
+                      'service_backend': settings.get('service_backend', 'docker'),
+                      'api_available': False, 'paths': []}
+            if settings.get('service_backend') == 'systemd':
+                from .native import manager, units
+                result['components'] = {name: subprocess.run(manager(settings)+['is-active', '--quiet', name],
+                    capture_output=True, timeout=5).returncode == 0 for name in units(settings)}
             if running:
                 try:
                     result['paths'] = [{k: p.get(k) for k in ('name', 'ready', 'tracks', 'readers')} for p in service.api('paths/list?itemsPerPage=10000')['items']]
@@ -244,7 +278,7 @@ def execute(args):
                 except OSError:
                     pass
             print(dump(result), end='')
-            return 0 if result['api_available'] else 1
+            return 0 if result['api_available'] and all(result.get('components', {}).values()) else 1
         elif args.command == 'config-check':
             generated = render(settings, accounts, control)
             if generated != (store.path / 'mediamtx/mediamtx.yml').read_text():
@@ -252,7 +286,7 @@ def execute(args):
             if settings['mode'] == 'production':
                 check_tls(store, settings)
             service.compose(['config', '--quiet'])
-            print('账号、设置、TLS（如适用）和 Compose 配置检查通过。')
+            print('账号、设置、TLS（如适用）和服务配置检查通过。')
         elif args.command == 'backup':
             print(backup(store, args.file, args.include_certificates))
         elif args.command == 'restore':

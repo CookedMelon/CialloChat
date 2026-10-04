@@ -7,7 +7,8 @@
   "rtmps_port": 1936,
   "rtsp_port": 8554,
   "api_port": 9997,
-  "publish_limit_kbps": 45000,
+  "publish_limit_kbps": 4000,
   "certificate": "certs/server.crt",
-  "private_key": "certs/server.key"
+  "private_key": "certs/server.key",
+  "traffic_enabled": true
 }

@@ -51,6 +51,22 @@ class Harness:
         settings['bind_address'] = '127.0.0.1'
         self.passwords = {'alice': new_password(), 'bob': new_password() + '&#+?%'}
         self.read_keys = {'alice':new_password(), 'bob':new_password()+'&#/%中文'}
+        self.buffer_process = None
+        self.buffer_secret = None
+        if getattr(args, 'buffer_ms', 0):
+            if not args.mediamtx:
+                raise ValueError('缓冲验证需要 --mediamtx 原生程序')
+            settings.update(service_backend='systemd', native_runtime=directory,
+                            rtsp_buffer_ms=args.buffer_ms, rtsp_internal_port=free_ports()[0])
+            self.buffer_secret = os.urandom(32)
+            atomic_write(self.store.path/'rtspbuffer/proxy-secret', self.buffer_secret)
+        if getattr(args, 'test_video_asset', None):
+            settings['test_video_enabled'] = True
+            asset = self.store.path/'test-video/test.mp4'
+            asset.parent.mkdir(mode=0o700, exist_ok=True)
+            asset.symlink_to(Path(args.test_video_asset).resolve())
+            from streamctl.testchannel import prepare
+            prepare(self.store.path)
         accounts['users'] = [new_account(name, value, self.read_keys[name]) for name, value in self.passwords.items()]
         atomic_write(self.store.path / 'settings.json', dump(settings))
         atomic_write(self.store.path / 'accounts.json', dump(accounts))
@@ -87,19 +103,29 @@ class Harness:
         self.service.settings = self.store.read('settings.json')
         if self.args.mediamtx:
             import threading
-            self.auth_server = AdmissionServer(('127.0.0.1', 0), Policy(self.store.path/'mediamtx/mediamtx.yml'))
+            self.auth_server = AdmissionServer(('127.0.0.1', 0), Policy(
+                self.store.path/'mediamtx/mediamtx.yml', proxy_secret=self.buffer_secret))
             self.auth_address = f'http://127.0.0.1:{self.auth_server.server_port}/auth'
             self.auth_thread = threading.Thread(target=self.auth_server.serve_forever, daemon=True)
             self.auth_thread.start()
             s = self.service.settings
             env = os.environ.copy()
-            env.update(MTX_APIADDRESS=f'127.0.0.1:{s["api_port"]}', MTX_RTSPADDRESS=f'127.0.0.1:{s["rtsp_port"]}',
+            env.update(MTX_APIADDRESS=f'127.0.0.1:{s["api_port"]}', MTX_RTSPADDRESS=f'127.0.0.1:{s.get("rtsp_internal_port", s["rtsp_port"])}',
                        MTX_RTMPADDRESS=f'127.0.0.1:{s["rtmp_port"]}', MTX_RTMPSADDRESS=f'127.0.0.1:{s["rtmps_port"]}',
                        MTX_RTMPSERVERCERT=str(self.store.path/s['certificate']), MTX_RTMPSERVERKEY=str(self.store.path/s['private_key']),
                        MTX_AUTHHTTPADDRESS=self.auth_address)
             file = open(self.log, 'ab'); self.handles.append(file)
             self.process = subprocess.Popen([self.args.mediamtx, str(self.store.path/'mediamtx/mediamtx.yml')], env=env, stdout=file, stderr=file)
             self.service.wait_loaded((self.store.path/'mediamtx/mediamtx.yml').read_text())
+            if self.buffer_secret:
+                self.buffer_process = subprocess.Popen([sys.executable, '-m', 'streamctl.rtspbuffer',
+                    '--runtime', str(self.store.path)], env=dict(os.environ, PYTHONPATH=str(ROOT/'src')),
+                    stdout=file, stderr=file)
+                def relay_ready():
+                    try:
+                        with socket.create_connection(('127.0.0.1', s['rtsp_port']), timeout=.3): return True
+                    except OSError: return False
+                wait(relay_ready)
             write_watchdog_config(self.store, s, self.store.read('control.json'))
             health = self.store.path/'watchdog-health'
             health.unlink(missing_ok=True)
@@ -113,6 +139,9 @@ class Harness:
 
     def stop_service(self):
         if self.args.mediamtx:
+            if self.buffer_process and self.buffer_process.poll() is None:
+                self.buffer_process.terminate(); self.buffer_process.wait(timeout=5)
+            self.buffer_process = None
             if self.watchdog_process and self.watchdog_process.poll() is None:
                 self.watchdog_process.terminate(); self.watchdog_process.wait(timeout=8)
             self.watchdog_process = None
@@ -169,8 +198,9 @@ class Harness:
         assert auth['State']['Health']['Status'] == 'healthy'
         assert auth['HostConfig']['ReadonlyRootfs'] is True
         assert not auth['HostConfig']['PortBindings'], 'admission port must remain private'
-        assert len(auth['Mounts']) == 1 and auth['Mounts'][0]['Destination'] == '/config'
-        assert auth['Mounts'][0]['RW'] is False
+        auth_mounts = {m['Destination']: m for m in auth['Mounts']}
+        assert set(auth_mounts) == {'/config', '/leases'}
+        assert not auth_mounts['/config']['RW'] and auth_mounts['/leases']['RW']
         networks = auth['NetworkSettings']['Networks']
         assert len(networks) == 1
         network = json.loads(subprocess.check_output(['docker', 'network', 'inspect', next(iter(networks))], text=True, timeout=15))[0]
@@ -182,16 +212,18 @@ class Harness:
         assert guard['Config']['Image'] == auth_image()
         assert guard['HostConfig']['ReadonlyRootfs'] is True
         assert not guard['HostConfig']['PortBindings']
-        assert len(guard['Mounts']) == 1 and guard['Mounts'][0]['Destination'] == '/watchdog'
-        assert guard['Mounts'][0]['RW'] is False
-        assert set(guard['NetworkSettings']['Networks']) == set(networks)
+        guard_mounts = {m['Destination']: m for m in guard['Mounts']}
+        assert set(guard_mounts) == {'/watchdog', '/config', '/leases', '/notifications'}
+        assert all(not guard_mounts[p]['RW'] for p in ('/watchdog', '/config', '/notifications'))
+        assert guard_mounts['/leases']['RW']
+        assert set(networks) <= set(guard['NetworkSettings']['Networks'])
         return {'mode': self.service.settings['mode'], 'image': item['Config']['Image'],
                 'user': item['Config']['User'], 'ports': ports, 'restart': 'unless-stopped',
                 'read_only_config_and_certificates': True, 'logging': host['LogConfig'],
                 'bitrate_watchdog_healthy_and_private': True,
                 'admission': {'image': auth['Config']['Image'], 'healthy': True,
                               'internal_network_only': True, 'no_published_ports': True,
-                              'read_only_policy_only': True}}
+                              'read_only_policy_and_persistent_leases': True}}
 
     def ready(self, path):
         p = self.state(path); return bool(p and p['ready'])
@@ -229,7 +261,7 @@ class Harness:
         return credentials(self.service.settings, username, read_key=self.read_keys[username])['read_url']
 
     def bitrate_limit(self, tls=False, rtsp=False):
-        original = self.store.read('settings.json').get('publish_limit_kbps', 45000)
+        original = self.store.read('settings.json').get('publish_limit_kbps', 4000)
         accounts = self.store.read('accounts.json')
         source = self.source_id('live/alice')
         def limit(value):
@@ -280,7 +312,10 @@ class Harness:
         url = f'rtsp://{host}/{path or "live/"+username}?read_key=' + urllib.parse.quote(key, safe='') + suffix
         result = subprocess.run([self.args.ffprobe,'-v','error','-rtsp_transport','tcp',
                                  '-show_streams',url],capture_output=True,timeout=12)
-        assert result.returncode != 0 and b'401' in result.stderr, 'URL watch key rejection unproven'
+        if not (result.returncode != 0 and b'401' in result.stderr):
+            import re
+            safe = re.sub(r'rtsp://\S+', '[URL]', result.stderr.decode(errors='replace'))
+            raise AssertionError('URL watch key rejection unproven: '+safe)
 
     def read(self, username, seconds=3, check_account_color=True):
         url = self.read_url(username)
@@ -290,8 +325,14 @@ class Harness:
         codecs = {x['codec_name'] for x in json.loads(probe.stdout)['streams']}
         assert {'h264', 'aac'} <= codecs, codecs
         result = subprocess.run([self.args.ffmpeg, '-v', 'error', '-nostdin', '-rtsp_transport', 'tcp', '-i', url,
-                                 '-t', str(seconds), '-map', '0:v:0', '-map', '0:a:0', '-f', 'null', '-'], capture_output=True, timeout=12)
-        assert result.returncode == 0, 'audio/video decode failed'
+                                 '-t', str(seconds), '-map', '0:v:0', '-map', '0:a:0',
+                                 # This is a decode check, not a remux timing
+                                 # check: RTCP clock corrections at join can
+                                 # make null muxer's output DTS step backwards.
+                                 '-vf', 'setpts=N/(FRAME_RATE*TB)', '-fps_mode:v', 'passthrough',
+                                 '-enc_time_base:v', '1:90000',
+                                 '-f', 'null', '-'], capture_output=True, timeout=12)
+        assert result.returncode == 0 and not result.stderr, 'audio/video decode failed'
         frame = subprocess.run([self.args.ffmpeg, '-v', 'error', '-nostdin', '-rtsp_transport', 'tcp', '-i', url,
                                 '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], capture_output=True, timeout=12)
         assert frame.returncode == 0 and len(frame.stdout) == 3, 'missing RGB sample'
@@ -363,7 +404,7 @@ class Harness:
 
 def profile_validation(args):
     report = {'backend':'native' if args.mediamtx else 'compose', 'result':'failed', 'profile': {
-        'resolution':'2560x1440', 'fps':60, 'video_kbps':34000, 'audio_kbps':192, 'limit_kbps':45000}}
+        'resolution':'2560x1440', 'fps':30, 'video_kbps':3200, 'audio_kbps':128, 'limit_kbps':4000}}
     status = 1
     with tempfile.TemporaryDirectory(prefix='ciallochat-profile-') as directory:
         h = Harness(args, directory)
@@ -374,8 +415,8 @@ def profile_validation(args):
             atomic_write(h.store.path/'mediamtx/mediamtx.yml',render(s,a,c))
             h.start()
             if not args.mediamtx: report['deployment'] = h.deployment_state()
-            h.bob = h.publish('bob', tls=True, video_kbps=34000, resolution='2560x1440', fps=60,
-                              audio_kbps=192, log_level='info', source_file=args.profile_input)
+            h.bob = h.publish('bob', tls=True, video_kbps=3200, resolution='2560x1440', fps=30,
+                              audio_kbps=128, log_level='info', source_file=args.profile_input)
             report['stage'] = 'publisher startup'
             wait(lambda:h.ready('live/bob'), 30)
             report['stage'] = 'RTSP describe and format'
@@ -384,7 +425,7 @@ def profile_validation(args):
                 '-show_entries','stream=codec_name,width,height,r_frame_rate','-of','json',h.read_url('bob')],timeout=12)
             video = next(x for x in json.loads(streams)['streams'] if x['codec_name']=='h264')
             report['advertised_video'] = video
-            assert (video['width'],video['height'],video['r_frame_rate']) == (2560,1440,'60/1')
+            assert (video['width'],video['height'],video['r_frame_rate']) == (2560,1440,'30/1')
             source = h.source_id('live/bob')
             def counter():
                 return next(x['inboundBytes'] for x in h.service.api('rtmps/conns/list?itemsPerPage=10000')['items'] if x['id']==source)
@@ -395,19 +436,19 @@ def profile_validation(args):
             h.read('bob', 8, check_account_color=not args.profile_input)
             rate = (counter()-baseline)*8/(time.monotonic()-start)/1000
             report['actual_ingress_kbps'] = round(rate)
-            assert 30000 < rate < 45000, f'unexpected measured ingress rate: {rate:.0f} Kbps'
+            assert 3000 < rate < 4000, f'unexpected measured ingress rate: {rate:.0f} Kbps'
             assert h.bob.poll() is None and h.source_id('live/bob') == source
             report.update(result='passed', actual_ingress_kbps=round(rate),
                           video_and_audio_decoded=True, no_basic_challenge=True,
                           remained_connected_under_default_limit=True)
             status = 0
-            print('PASS 1440p60 H264 34000 Kbps and AAC 192 Kbps through RTMPS and RTSP; default cap preserved',flush=True)
+            print('PASS 1440p30 H264 3200 Kbps and AAC 128 Kbps through RTMPS and RTSP; default cap preserved',flush=True)
         except Exception as exc:
             report['error'] = type(exc).__name__ + (': '+str(exc) if isinstance(exc, AssertionError) else '')
             import re
             logs = sorted(h.store.path.glob('publisher-*.log'),key=lambda p:p.stat().st_mtime)
             if logs:
-                tail = re.sub(r'(?:rtmps?|rtspt?)://\S+', '[REDACTED URL]', logs[-1].read_text()[-3000:])
+                tail = re.sub(r'(?:rtmps?|rtsp)://\S+', '[REDACTED URL]', logs[-1].read_text()[-3000:])
                 for secret in list(h.passwords.values()) + list(h.read_keys.values()):
                     tail = tail.replace(secret, '[REDACTED]')
                 report['publisher_tail'] = tail
@@ -424,8 +465,8 @@ def main():
     parser.add_argument('--ffmpeg', default='ffmpeg'); parser.add_argument('--ffprobe', default='ffprobe')
     parser.add_argument('--ports', type=int, nargs=4, metavar=('RTMP','RTMPS','RTSP','API'))
     parser.add_argument('--report', default=str(ROOT/'runtime/reports/smoke.json'))
-    parser.add_argument('--profile-only', action='store_true', help='Validate real 1440p60/34 Mbps RTMPS ingress and RTSP decode')
-    parser.add_argument('--profile-input', help='Optional pre-encoded 1440p60/34 Mbps H264 AAC file; publisher copies codecs')
+    parser.add_argument('--profile-only', action='store_true', help='Validate real 1440p30/3200 Kbps RTMPS ingress and RTSP decode')
+    parser.add_argument('--profile-input', help='Optional pre-encoded 1440p30/3200 Kbps H264 AAC file; publisher copies codecs')
     args = parser.parse_args()
     os.umask(0o077)
     if args.profile_only:

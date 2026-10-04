@@ -10,9 +10,26 @@ import urllib.request
 from streamctl.accounts import new_account, read_identity, hash_password
 from streamctl.authserver import AdmissionServer, Policy
 from streamctl.config import Store, render, atomic_write
+from streamctl.testquota import TestQuota
+from streamctl.relayauth import signed_query
 
 
 class URLAdmission(unittest.TestCase):
+    def test_public_test_media_needs_enabled_channel_and_signed_actual_peer(self):
+        self.s.update(service_backend='systemd', rtsp_buffer_ms=1000, test_video_enabled=True)
+        self.save()
+        policy = Policy(self.file, proxy_secret=b's'*32)
+        quota = TestQuota(self.store.path/'test-video/quota.sqlite3')
+        grant = quota.acquire('203.0.113.1', 'test')
+        request = self.request(path='test/'+grant.token, query='', ip='127.0.0.1')
+        self.assertFalse(policy.authorize(request))
+        query = signed_query({}, grant.ip, request['path'], b's'*32)
+        request['query'] = urllib.parse.urlencode(query, doseq=True)
+        self.assertTrue(policy.authorize(request))
+        self.assertFalse(policy.authorize(dict(request, path='live/alice')))
+        quota.release(grant)
+        self.assertFalse(policy.authorize(request))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -32,7 +49,8 @@ class URLAdmission(unittest.TestCase):
 
     def request(self, **changes):
         data = dict(action='read', path='live/alice', protocol='rtsp', user='', password='',
-                    query=urllib.parse.urlencode({'read_key':self.read}), ip='127.0.0.1')
+                    query=urllib.parse.urlencode({'read_key':self.read}), ip='127.0.0.1',
+                    id='12345678-1234-1234-1234-123456789abc')
         data.update(changes)
         return data
 

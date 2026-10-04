@@ -1,6 +1,6 @@
 # 账号与运维
 
-从项目根目录运行命令。管理员需要 runtime 文件和 Docker 访问权限。可用 `--runtime /独立目录` 或 `CIALLOCHAT_RUNTIME` 指定数据目录；隔离服务还需设置 `CIALLOCHAT_PROJECT`，默认项目名 `ciallochat`。
+从项目根目录运行命令。管理员需要 runtime 文件和所选 systemd / Docker 后端的管理权限。可用 `--runtime /独立目录` 或 `CIALLOCHAT_RUNTIME` 指定数据目录；隔离服务还需设置 `CIALLOCHAT_PROJECT`，默认项目名 `ciallochat`。
 
 ## 创建与交付
 
@@ -12,11 +12,11 @@ umask 077
 ./streamctl user info alice
 ```
 
-创建同时交付 `publish_username`、`publish_key`、`publish_url`、`read_username`、`read_key`、`read_url`、`vrchat_read_url` 和 `legacy_read_url`。把 `publish_url` 交给发布者，把 `read_url` 交给普通观看者，把 `vrchat_read_url` 交给 VRChat 观看者。新地址用 `?read_key=...` 传递观看密钥，由服务端直接校验，正确密钥无需 Basic 挑战。`legacy_read_url` 保留旧用户名密码地址，内部观看身份形如 `ciallochat-read-alice`。`password` 是兼容旧调用的推流密钥别名。
+创建同时交付 `publish_username`、`publish_key`、`publish_url`、`read_username`、`read_key`、`read_url`、`vrchat_read_url` 和 `legacy_read_url`。把 `publish_url` 交给发布者，把 `read_url` 交给普通观看者，把 `vrchat_read_url` 交给 VRChat 观看者。新地址用 `?read_key=...` 传递观看密钥，由服务端直接校验，正确密钥无需 Basic 挑战。缓冲入口使用查询参数观看密钥；`legacy_read_url` 仅供无缓冲的原生兼容入口保留旧用户名密码地址，内部观看身份形如 `ciallochat-read-alice`。`password` 是兼容旧调用的推流密钥别名。
 
 每个账号固定路径 `live/<username>`。用户名为 1–48 位 ASCII，首位字母或数字，其余可含 `_`、`-`；保留 `any`、`admin` 及 `ciallochat-` 前缀。两类密钥独立随机生成，默认各有 192 bit 熵；自选密钥为 12–256 字符，不能有控制字符，两类密钥不得相同。分别用独立随机盐的 Argon2id 保存；list/info 和业务备份不输出媒体明文密钥。
 
-明文只在创建或对应重置时交付。已经保存当前密钥时，可隐藏输入重新生成该类 URL：
+本地 CLI 在创建或对应重置时交付明文；远程控制另外维护权限 600 的私有凭据库，供授权的 `cialloctl list` 查询当前密码，见 [远程控制](remote-control.md)。已经保存当前密钥时，可隐藏输入重新生成该类 URL：
 
 ```bash
 ./streamctl user credentials alice --kind publish --prompt-password
@@ -76,10 +76,10 @@ schema 1 旧账号不会被普通启动、配置应用或账号命令接受。�
 
 ```bash
 ./streamctl limits
-./streamctl limits --publish-kbps 45000
+./streamctl limits --publish-kbps 4000
 ```
 
-默认每路 45000 Kbps，旧实例未配置字段时同样生效；不可设为 0 关闭。在线修改不重启发布者。码率持续超限会自动断开该发布连接，账号、密钥和其他发布者保持不变，详细规则见 [码率限制](bitrate.md)。
+默认每路 4000 Kbps，旧实例未配置字段时同样生效；已有显式旧上限需执行上述命令调整，不可设为 0 关闭。在线修改不重启发布者。码率持续超限自动断开该发布连接。每个推流密码还受累计推流两小时额度约束，详见 [码率限制](bitrate.md) 和 [密码期限](publisher-lifetime.md)。
 
 ## 备份恢复
 

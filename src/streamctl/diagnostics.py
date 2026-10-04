@@ -20,7 +20,9 @@ def doctor(store, validation=False):
     add('architecture', platform.machine() in ('x86_64', 'aarch64'), platform.machine())
     add('environment', True, 'WSL' if 'microsoft' in platform.release().lower() else 'native Linux')
     add('system Python', __import__('sys').version_info >= (3,12), __import__('sys').executable)
-    for cmd in (['docker', 'info'], ['docker', 'compose', 'version']):
+    backend = store.read('settings.json').get('service_backend', 'docker') if (store.path/'settings.json').exists() else 'docker'
+    commands = (['systemctl', '--version'],) if backend == 'systemd' else (['docker', 'info'], ['docker', 'compose', 'version'])
+    for cmd in commands:
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             ok = p.returncode == 0
@@ -30,6 +32,12 @@ def doctor(store, validation=False):
             add(' '.join(cmd), ok, p.stdout.strip()[:100] if ok else (p.stderr or p.stdout).strip()[:500])
         except (OSError, subprocess.TimeoutExpired) as exc:
             add(' '.join(cmd), False, str(exc))
+    if backend == 'systemd':
+        try:
+            from .native import binary
+            add('MediaMTX native', True, str(binary()))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            add('MediaMTX native', False, str(exc))
     if validation:
         for command in ('ffmpeg', 'ffprobe'):
             add(command, bool(shutil.which(command)), shutil.which(command) or 'missing; install with --with-validation')
@@ -43,6 +51,11 @@ def doctor(store, validation=False):
         from .service import Service
         service = Service(store, settings, control)
         if service.running():
+            if backend == 'systemd':
+                from .native import manager, units
+                states = {name: subprocess.run(manager(settings)+['is-active', '--quiet', name],
+                    capture_output=True, timeout=5).returncode == 0 for name in units(settings)}
+                add('service components', all(states.values()), ', '.join(k+('=up' if v else '=down') for k,v in states.items()))
             add('ports', True, 'service running; media availability requires smoke test')
         else:
             check_ports(settings)
@@ -56,10 +69,16 @@ def doctor(store, validation=False):
 
 
 def check_ports(settings):
-    host = '127.0.0.1' if settings['mode'] == 'local' else settings['bind_address']
+    host = '127.0.0.1' if settings['mode'] == 'local' and not settings.get('local_network') else settings['bind_address']
     keys = ['rtsp_port', 'api_port', 'rtmp_port' if settings['mode'] == 'local' else 'rtmps_port']
+    if settings.get('service_backend') == 'systemd':
+        settings = dict(settings, auth_port=settings.get('auth_port', 9000))
+        keys.append('auth_port')
+        if settings.get('rtsp_buffer_ms'):
+            settings['rtsp_internal_port'] = settings.get('rtsp_internal_port', 18554)
+            keys.append('rtsp_internal_port')
     for key in keys:
-        address = '127.0.0.1' if key == 'api_port' else host
+        address = '127.0.0.1' if key in ('api_port', 'auth_port', 'rtsp_internal_port') else host
         family = socket.AF_INET6 if ':' in address else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as sock:
             try:

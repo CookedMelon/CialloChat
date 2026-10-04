@@ -3,17 +3,21 @@ services:
   watchdog:
     image: "${CIALLOCHAT_AUTH_IMAGE:?Run with streamctl}"
     pull_policy: never
-    entrypoint: ["python", "/app/watchdog.py"]
+    entrypoint: ["python", "/app/watchdog.py", "--leases", "/leases/leases.sqlite3", "--policy", "/config/mediamtx.yml", "--mail", "/notifications/smtp.json", "--traffic", "/traffic/traffic.sqlite3"]
     user: "${CIALLOCHAT_UID:?Run with streamctl}:${CIALLOCHAT_GID:?Run with streamctl}"
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    mem_limit: 64m
+    mem_limit: 192m
     tmpfs: ["/tmp:size=1m,mode=1777"]
     volumes:
       - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/watchdog:/watchdog:ro"
-    networks: [admission]
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/mediamtx:/config:ro"
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/leases:/leases"
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/notifications:/notifications:ro"
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/traffic:/traffic"
+    networks: [default, admission]
     depends_on:
       mediamtx:
         condition: service_started
@@ -39,6 +43,7 @@ services:
     mem_limit: 384m
     volumes:
       - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/mediamtx:/config:ro"
+      - "${CIALLOCHAT_RUNTIME:?Run with streamctl}/leases:/leases"
     networks: [admission]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:9000/health',timeout=2).close()"]

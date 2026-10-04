@@ -2,5 +2,7 @@
   "api_url": "http://mediamtx:9997/v3/",
   "username": "ciallochat-control",
   "password": "<本实例管理凭据，由streamctl自动生成，切勿提交真实值>",
-  "publish_limit_kbps": 45000
+  "publish_limit_kbps": 4000,
+  "publish_base": "rtmps://chat.v50to.cc:1936",
+  "traffic_enabled": true
 }

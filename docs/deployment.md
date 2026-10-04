@@ -1,119 +1,59 @@
-# 部署 CialloChat
+# 完整服务部署
 
-## 环境与初始化
+推荐使用原生 systemd，不上传 Docker 镜像或测试视频。MediaMTX 固定为 1.21.1，Python 依赖锁定在 `requirements.lock`。本地测试完成前不更新远程实例。
 
-正式目标是原生 Ubuntu 24.04 amd64/arm64；Ubuntu 26.04 用于开发。Python 使用 `/usr/bin/python3` 建立项目 `.venv`，依赖全部固定在 `requirements.lock`。Docker Compose 需要 ≥ 2.24.4（本地端口覆盖使用 `!override`），已有可用 Docker/Compose 会复用。
-
-```bash
-sudo ./setup.sh --mode production
-```
-
-新生产实例没有证书时，setup 会在配置阶段明确失败。已完成的安装和初始化会保留，配置证书后重复执行即可。setup 不创建默认推流密码，不启动 CialloChat，不修改防火墙，不自动加入 docker 组，不自动卸载冲突包。使用 setup 的同一管理员身份运行后续命令，避免混用 root/普通用户造成文件权限问题。
-
-原生 Ubuntu 缺少 Docker 时，setup 使用 Docker 官方仓库，并按 `/etc/os-release` 选择 noble 或 resolute；已有 CLI 但 daemon 不可用时报告故障。WSL 应先在 Docker Desktop → Settings → Resources → WSL Integration 启用对应发行版，确认 `docker info` 和 `docker compose version` 真正成功，再运行 setup。setup 不在 WSL 中替换 Docker Desktop。
+## 本地 WSL / Ubuntu
 
 ```bash
-./setup.sh --check                 # 只读，不安装依赖或初始化
-./streamctl doctor --with-validation
+./setup.sh --backend systemd --mode local
+# config/smtp.json 填 SMTP 授权码和 recipients，接受 smtp_host/smtp_port/smtp_ssl
+# config/control-server.json 填独立随机管理密码
+chmod 600 config/smtp.json config/control-server.json
+.venv/bin/python scripts/build-test-video.py
+.venv/bin/python scripts/deploy-local.py --test-video
+source ~/.bashrc
+cialloctl info cc
 ```
 
-首次运行需要访问系统 apt 源、Docker 官方仓库、PyPI 和 Docker Hub。端口冲突在启动前检查；doctor 会区分 OS、架构、WSL、Python、Docker daemon、Compose、FFmpeg 和配置权限。
+`deploy-local.py` 完成本地证书、私有管理配置、SMTP 安装、账号创建与邮件、五个用户级 systemd 服务、控制脚本软链接和 PATH 配置。`--test-video` 启用已经生成的测试频道，创建通知增加测试 URL。它只部署本地，不连接远程。账号首次创建后重复部署不更换密码或清空租约；已有其他后端实例需先停服并迁移。
 
-## 生产设置与 TLS
+本地控制证书由本地 CA 签发，客户端使用生成的 `ca_file` 验证，不安装到系统信任库。证书一年有效；内网地址改变时应先停服并备份旧证书，再重新生成。RTMP 本地输入保持未加密，适合内网最终验证。
 
-在停止服务后编辑 `runtime/settings.json`，保留 schema 与端口字段。示例改动：
-
-```json
-{
-  "mode": "production",
-  "hostname": "stream.example.com",
-  "bind_address": "0.0.0.0",
-  "certificate": "certs/server.crt",
-  "private_key": "certs/server.key"
-}
-```
-
-此片段是修改项，不能替代完整设置文件。证书 PEM 应包含服务器证书和中间证书链，私钥为可无人值守读取的 PEM。使用外部签发/续期工具，不要求某个证书供应商。将文件放入 runtime/certs，设置权限：
+| 端口 | 用途 | 监听范围 |
+| --- | --- | --- |
+| 1935 | 本地 RTMP 推流 | 指定内网地址 |
+| 8554 | 带用户鉴权、一秒缓冲的 RTSP/TCP | 指定内网地址 |
+| 15347 | TLS 控制命令 | 指定内网地址 |
+| 18554 | 内部原生 RTSP | 127.0.0.1 |
+| 9997 | MediaMTX 管理 API | 127.0.0.1 |
+| 9000 | 推流/观看鉴权 | 127.0.0.1 |
 
 ```bash
-chmod 700 runtime runtime/certs
-chmod 600 runtime/settings.json runtime/certs/server.crt runtime/certs/server.key
-./streamctl apply --mode production
-./streamctl config-check
-./streamctl user add alice
-./streamctl up --mode production
 ./streamctl status
-```
-
-工具检查文件权限、证书/私钥公钥一致、主机名、有效期和信任链。生产缺少或无效证书时启动失败；RTMP 服务只开启 TLS 的 1936，Compose 不发布 1935。RTSP 8554 要求该路独立观看密钥，仍为未加密播放；推流 TLS 不代表观看链路加密。MediaMTX 的 publish 授权按账号与路径生效，RTSP 服务本身也支持已授权账号发布；指定的推流工作流使用 RTMPS，不能把协议端口限制当作按协议授权。
-
-容器使用运行管理工具者的 UID/GID，runtime 与私钥无需放宽给其他宿主用户。容器根文件系统只读，配置目录与证书目录只读挂载；挂载目录允许原子替换生成配置。
-
-开放 TCP 1936、8554，管理 API 的 9997 只绑定 127.0.0.1。地址/端口可配置，local 强制宿主回环绑定。Docker 发布端口可能绕过 UFW；按 Docker 的 DOCKER-USER/iptables 规则和云安全组控制访问，不能仅凭 UFW 状态判断暴露范围。setup 不自动重写规则。
-
-## 证书更新
-
-活动直播会因证书重启短暂断开。先在独立目录验证新证书、私钥和链，保存旧文件，再在维护窗口替换 runtime/certs 下的文件，保持 600 权限：
-
-```bash
-./streamctl certificate-reload
-```
-
-该命令检查证书，重启 MediaMTX，确认管理接口和实际 TLS 连接中服务器证书与新文件相同。若失败，恢复旧证书/私钥，重新执行命令。OBS/FFmpeg 应重新连接。`runtime/certs/ca.crt` 仅用于显式本地测试 CA，正式公网证书部署应删除测试 CA 并使用系统信任链。
-
-## 服务与升级
-
-容器使用 `restart: unless-stopped`；宿主 Docker daemon 应由 systemd 启动。日志每份 10 MiB，保留 3 份。状态分别输出 container_running、api_available 和各路径 ready/tracks/readers。容器/API 活着不等于直播有媒体。
-
-```bash
-./streamctl logs --tail 100
-./streamctl logs --follow
+./streamctl doctor
 ./streamctl down
-./streamctl backup /安全目录/before-upgrade.json --include-certificates
+./streamctl up
+systemctl --user status ciallochat-{auth,mediamtx,watchdog,buffer,control}
 ```
 
-升级需显式修改 `config/version.json` 和 Compose 中版本、digest，核对模板/API，备份后测试。失败回到原版本的程序、镜像和备份。restore 拒绝不同版本元数据，不能把不兼容备份直接套进新版本。
+`up` 管理所有组件，`down` 停止并禁用自动启动。用户级服务随用户 systemd 会话恢复；WSL 本身是否启动由 Windows 管理。
 
-单条直播出口带宽约等于码率 × 同时读者数，再预留协议开销；第一版无转码、流量额度、录制、HLS 或 WebRTC，不承诺公网延迟。
+## 正式服务器 chat.v50to.cc
 
-## URL 观看密钥鉴权容器
+在本地最终验收通过后进行更新。复用现有 `/opt/ciallochat`、原生 MediaMTX、Python 虚拟环境和有效证书，增量上传源码。更新前停服保存账号、租约/凭据库、流量库、SMTP、控制配置、证书及生成配置；升级不得把本地账号覆盖到公网。
 
-Compose 运行 `mediamtx`、`auth` 和 `watchdog`。setup / up 自动构建鉴权与码率监控共用镜像：Python 基础镜像固定 digest，依赖沿用 requirements.lock，镜像标签由 Dockerfile、依赖、两份服务源文件和构建排除规则的 SHA256 决定。构建上下文仅包含这五个文件，不含 runtime、凭据或证书。已有相同内容镜像可直接复用，离线部署可事先构建并通过 docker save/load 搬运。
+原生设置可参考 [完整设置样例](../config/native-settings.example.json)：`service_backend=systemd`、`systemd_scope=system`、`mode=production`、`rtsp_buffer_ms=1000`、`rtsp_internal_port=18554`、`control_enabled=true`。保留每路 4000 Kbps 与两小时租约。安装实际控制配置到权限 600 的 `runtime/control-server.json`，SMTP 到 `runtime/notifications/smtp.json`，设置 `native_runtime` 为该实例 runtime 的绝对路径。
 
-`auth` 没有宿主机端口，位于 Docker 内部网络，只读挂载生成的哈希权限配置；不挂载管理明文、账号报告或私钥。服务启动等待其健康检查，失败时拒绝新连接。API、推流和观看没有鉴权豁免。成功校验的短期缓存随生成配置原子替换立即失效；账号撤销仍通过 Control API 终止已有连接。
+生产模式严格使用 RTMPS 1936，使用匹配 chat.v50to.cc 的受信任域名证书及完整链。RTSP 8554 和 TLS 控制 15347 对外；18554、9997、9000 不开放。TCP 80 用于域名证书签发/续期。保留证书续期和入口连接防护服务。SSH 使用 `ssh root@chat.v50to.cc`；RTMPS 与控制服务不能继续沿用只有 IP SAN 的证书。
 
-`watchdog` 也没有公开端口，只读挂载专用监控配置，使用独立目录中的管理凭据检查累计入站字节并断开超限发布连接，不读取账号数据库、用户交付凭据或 TLS 私钥。`up` 等待全部容器健康。默认每路 45000 Kbps，在线修改命令和断连窗口见 [码率限制](bitrate.md)。
+升级时保留或一次生成 `runtime/test-video/test.mp4` 并启用 `test_video_enabled=true`；所有公开 URL 和通知均使用域名。
 
-升级先打包源代码和镜像，在隔离 Compose 项目上验证并备份正式实例。首次从内部认证升级时，先用旧代码执行 `./streamctl down`，再更新源代码，执行 `./streamctl apply`、`./streamctl config-check` 和 `./streamctl up`。这样避免旧媒体容器在加入内部网络之前加载新鉴权地址。直播需重连，账号、密钥和 TLS 文件无需重置。升级前的 schema 2 备份仍可恢复，恢复时自动生成新的 URL 密钥鉴权配置。
+应用配置后由 root 执行 `./streamctl up`，统一安装/启动 auth、mediamtx、watchdog、buffer、control；使用 `systemctl` 而非 `systemctl --user` 查看正式服务器组件。控制证书每次连接重新加载；MediaMTX 证书重载导致媒体重连，但缓冲服务保持运行。
 
-依据：[Docker Ubuntu 安装](https://docs.docker.com/engine/install/ubuntu/)、[Compose 合并规则](https://docs.docker.com/reference/compose-file/merge/)、[MediaMTX 1.21.1](https://github.com/bluenviron/mediamtx/releases/tag/v1.21.1)。
+服务端代理使用权限 600 的私有签名密钥，将真实观看来源地址交给鉴权服务，客户端不能伪造来源；缓冲入口不会代填任何账号密码。
 
-## 公网 IP 证书与自动续期
+## 备份与源码交付
 
-只有公网 IP 时，可以使用支持 IP SAN 的受信任证书。Let’s Encrypt 已提供 IP 证书，Certbot 5.4 支持相关工作流；IP 证书有效期较短，需要自动续期。[官方说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)
+常规 `streamctl backup` 保存账号哈希与设置，完整恢复还必须停服备份 `runtime/leases`（两小时租约、当前明文凭据、邮件队列）和 `runtime/traffic`。不要恢复旧租约让过期密码重新有效。
 
-在独立的 Certbot 环境中申请证书，不改动项目锁定的 Python 依赖。初次签发并复制完整链和私钥后，以该 IP 为 settings.json 的 hostname，启动 production；standalone 验证需要公网 TCP 80 可访问。推流使用 1936，观看使用 8554，管理 API 的 9997 保持回环。
-
-可以将下面的命令用于 Certbot 的 systemd 定时任务，路径按实际安装调整：
-
-```bash
-/opt/ciallochat-certbot/bin/certbot renew --quiet \
-  --deploy-hook '/opt/ciallochat/scripts/certbot-deploy.sh /opt/ciallochat'
-```
-
-定时任务建议每 12 小时检查一次。Certbot 通过 RENEWED_LINEAGE 传入成功续期的证书目录；钩子先在临时目录验证完整链、主机名与私钥，保存权限 600 的旧证书备份，原子替换 runtime 文件，再重启并确认实际服务证书。失败时恢复原文件。证书更新会短暂断开直播，客户端需要重连。
-
-可以执行 `certbot renew --dry-run` 验证续期挑战。不要直接把 staging 的不受信任证书复制到正式 runtime；钩子会拒绝无有效公共信任链的证书。
-
-## 镜像离线导入
-
-当服务器无法访问 Docker Hub 时，可在有网络的可信环境导出固定镜像，再经 SCP 传输并校验文件 SHA256：
-
-```bash
-docker image save bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40 | gzip > mediamtx.tar.gz
-sha256sum mediamtx.tar.gz
-# 在目标服务器：
-docker image load -i mediamtx.tar.gz
-```
-
-Docker 29 的 OCI 导出按 digest 导入时可能只建立 image ID；可将已验证的该 ID 标为 bluenviron/mediamtx:1.21.1，再用完整 `tag@sha256:...` 执行 inspect，确认 RepoDigests 与版本锁一致。setup 复用已存在的完整锁定 digest，不凭可变标签跳过版本核对。Compose 配置继续使用原锁定 digest。
+`./scripts/package.sh` 只导出源码、公开配置样例和文档，排除整个 runtime、依赖、证书和实际 SMTP/控制配置。后端仍支持旧 Docker 无缓冲部署，但该路径不是本轮完整服务最终验收对象。

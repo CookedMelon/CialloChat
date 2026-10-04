@@ -39,7 +39,7 @@ def read_identity(username):
 
 def credentials(settings, username, publish_key=None, read_key=None):
     import urllib.parse
-    host = settings['hostname'] if settings['mode'] == 'production' else '127.0.0.1'
+    host = settings['hostname'] if settings['mode'] == 'production' or settings.get('local_network') else '127.0.0.1'
     if ':' in host:
         host = '[' + host + ']'
     result = {'username': username, 'stream_path': 'live/' + username}
@@ -54,7 +54,7 @@ def credentials(settings, username, publish_key=None, read_key=None):
         encoded = urllib.parse.quote(read_key, safe='')
         url = f'rtsp://{host}:{settings["rtsp_port"]}/live/{username}?read_key={encoded}'
         result.update(read_username=identity, read_key=read_key,
-                      read_url=url, vrchat_read_url='rtspt://' + url[len('rtsp://'):],
+                      read_url=url, vrchat_read_url=url,
                       legacy_read_url=f'rtsp://{identity}:{encoded}@{host}:{settings["rtsp_port"]}/live/{username}')
     return result
 
