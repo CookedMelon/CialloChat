@@ -20,7 +20,7 @@ bash control-scripts/install-path.sh
 source ~/.bashrc
 ```
 
-安装脚本创建 `~/InstallSpace/scripts/ciallochat` 指向项目的 `control-scripts` 文件夹，并创建 `~/InstallSpace/scripts/cialloctl` 命令软链接，将 `~/InstallSpace/scripts` 加入 `.bashrc` 的 PATH。命令通过软链接运行也能定位项目内的配置，普通命令仅需 Python 标准库，流量图表需要客户端 Pillow。
+安装脚本创建 `~/InstallSpace/scripts/ciallochat` 指向项目的 `control-scripts` 文件夹，并创建 `~/InstallSpace/scripts/cialloctl` 命令软链接，将 `~/InstallSpace/scripts` 加入 `.bashrc` 的 PATH。命令通过软链接运行也能定位项目内的配置。有项目 `.venv` 时优先使用其中的 Python，避免 Conda 等已激活环境改变 TLS 运行环境；没有项目虚拟环境时使用当前 Python。普通命令仅需 Python 标准库，流量图表需要安装在实际运行环境中的客户端 Pillow。
 
 阿里云安全组需允许客户端访问 TCP 15347。现有 SSH、推流和观看端口保持原用途；管理 API 9997 和鉴权 9000 仍仅监听本机。TLS 控制进程与媒体进程独立，统一由 `streamctl up/down` 管理；正式服务器用 `systemctl status ciallochat-control`，本地用 `systemctl --user status ciallochat-control` 查看状态。证书每次连接重新加载，现有证书续期机制同时适用于控制服务。完整缓冲服务使用原生 systemd 后端；容器内不启动此控制进程。
 
@@ -37,6 +37,7 @@ cialloctl del alice
 cialloctl refresh alice all
 cialloctl refresh alice push
 cialloctl refresh alice pull
+cialloctl refresh alice time
 # 可选机器可读输出及替代配置
 cialloctl --json list
 cialloctl --json info alice
@@ -57,7 +58,9 @@ cialloctl --config /安全目录/control-client.json list
 
 `refresh all` 更换两类密码；`refresh push` 仅更换推流密码。这两种操作立即废止旧推流代及待续期代，将累计推流额度重置为 7200 秒，未推流时不消耗，撤销旧发布连接。`refresh pull` 仅更换观看密码并撤销旧读者，推流密码和剩余使用额度保持不变。禁用的账号刷新后仍为禁用状态。
 
-创建和每次刷新都通知对应用户邮箱。创建邮件标题为“CialloChat用户创建”，手动刷新及自动续期统一为“CialloChat密码刷新”，不显示刷新范围。通知完整显示两类密码以及带凭据的推流、观看 URL，例如：
+`refresh time` 保留当前推流密码和观看密码，将剩余累计推流额度恢复至 7200 秒，正在推流的连接继续使用。未使用的自动续期候选密码被取消；如果额度已经耗尽且 `list` 显示已通知的待续期密码，则保留该显示密码并恢复额度；已过期且没有待续期密码时，恢复原推流密码的额度。禁用状态保持不变。此操作也发送邮件，说明“推流密钥使用时长已被管理员重置为两小时。”。
+
+创建和每次刷新都通知对应用户邮箱。创建邮件标题为“CialloChat用户创建”，手动刷新及自动续期统一为“CialloChat密码刷新”，不显示刷新范围。标题与用户名之间，自动续期添加“当前密钥接近使用上限，自动刷新。”，管理员刷新密码添加“密码已被管理员更新。”。通知完整显示两类密码以及带凭据的推流、观看 URL，例如：
 
 ```text
 CialloChat用户创建
@@ -65,9 +68,9 @@ CialloChat用户创建
 推流密码：<随机推流密码>
 观看密码：<随机观看密码>
 
-OBS推流URL：rtmps://chat.v50to.cc:1936/live/alice?user=alice&pass=<推流密码>
-播放器输入URL：rtsp://chat.v50to.cc:8554/live/alice?read_key=<观看密码>
-测试频道URL：rtsp://chat.v50to.cc:8554/test
+OBS推流URL：rtmps://chat.v50to.cc/live/alice?user=alice&pass=<推流密码>
+播放器输入URL：rtsp://watch.v50to.cc/live/alice?read_key=<观看密码>
+测试频道URL：rtsp://watch.v50to.cc/test
 
 推流密钥可用时长2小时
 ```
@@ -94,7 +97,7 @@ cialloctl --json traffic
 
 默认显示最近六个已经结束的十分钟区间。起止时间必须同时指定、按整十分钟对齐，并位于最近七天已经结束的区间内；未带偏移的时间使用客户端本地时区。文字和图片都显示实际起止时间。长区间自动合并柱子，全部记录仍计入总和；每个柱子按账号的推流接收量和观看发送量堆叠。PNG 在客户端生成并保存（默认 `runtime/reports/traffic-<编号>.png`），随后发送至管理员邮箱；终端同时输出每个账号的推流、观看与合计，以及全局三类总计。`--json` 也会生成并发送报告，另输出图表路径、原始十分钟数据和邮件状态。
 
-普通管理命令只需标准库，`traffic` 额外需要 **客户端** Python 的 Pillow，服务器无需安装绘图库。Pillow 需安装在实际运行 cialloctl 的客户端 Python 环境中。其他电脑可在运行脚本的同一 Python 环境安装 Pillow；Linux 若需中文账号字体，可安装 Noto CJK。图中 push 为推流、view 为观看；灰色区间表示记录不完整。图片上限为 256 KiB、1600×1200，上传图片前先完成小报文鉴权，非法密码不会触发大报文读取；上传限时五秒。每分钟最多六份报告，最多保存 64 份近期报告/待发邮件。管理员邮箱由服务器私有 SMTP 配置的 `admin_recipient` 指定，客户端不能指定收件人。每次调用发送一封报告，采集本身不定时发邮件。邮件失败写入独立持久队列，至少间隔 60 秒重试；SMTP 接受不保证立即抵达收件箱，响应丢失时可能需人工检查邮件。
+普通管理命令只需标准库，`traffic` 额外需要 **客户端** Python 的 Pillow，服务器无需安装绘图库。有项目 `.venv` 时用 `.venv/bin/python -m pip install Pillow` 安装客户端绘图库。其他电脑可在运行脚本的同一 Python 环境安装 Pillow；Linux 若需中文账号字体，可安装 Noto CJK。图中 push 为推流、view 为观看；灰色区间表示记录不完整。图片上限为 256 KiB、1600×1200，上传图片前先完成小报文鉴权，非法密码不会触发大报文读取；上传限时五秒。每分钟最多六份报告，最多保存 64 份近期报告/待发邮件。管理员邮箱由服务器私有 SMTP 配置的 `admin_recipient` 指定，客户端不能指定收件人。每次调用发送一封报告，采集本身不定时发邮件。邮件失败写入独立持久队列，至少间隔 60 秒重试；SMTP 接受不保证立即抵达收件箱，响应丢失时可能需人工检查邮件。
 
 watchdog 复用已有每秒媒体 API 查询，以连接 ID 的字节差累计，只统计 `live/<已配置账号>` 的发布接收和播放发送。每分钟及跨十分钟边界做小型 SQLite 检查点，数据保存在权限 `600` 的 `runtime/traffic/traffic.sqlite3`，不与鉴权库共用事务。历史记录每分钟清理，保留七天；新部署无法补回启用前历史。`traffic_enabled` 设置默认为 true，可改为 false 后应用配置停用采集。
 

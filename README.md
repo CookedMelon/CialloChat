@@ -1,8 +1,10 @@
 # CialloChat
 
+正式入口：OBS 推流 `rtmps://chat.v50to.cc/live/<user>?user=<user>&pass=<推流密码>`；观看 `rtsp://watch.v50to.cc/live/<user>?read_key=<观看密码>`；公开测试 `rtsp://watch.v50to.cc/test`。Nginx 转发到本机 1936、8554，部署方式见 [部署文档](docs/deployment.md)。
+
 面向 OBS 与 VRChat 的单机直播服务。每个用户有独立的推流密码、长期观看密码和 `live/<username>` 路径；创建、刷新密码和临近到期时通过邮件通知。每个推流密码可累计推流两小时，停推暂停计时，断线和重启不重置已用额度；额度耗尽会终止正在推流的连接。
 
-当前推荐原生 systemd 部署，MediaMTX 锁定 **1.21.1**。OBS 输入 H.264＋AAC，服务不转码、不录制；公开 RTSP/TCP 入口执行鉴权并提供已验证的 **1000 ms 固定缓冲与时间戳匀速发送**。每位观看者有独立的 2 MiB 队列，持续慢连接会被关闭，避免无限积压。默认推流上限 4000 Kbps，适合视频 3200 Kbps＋音频 128–160 Kbps。
+当前推荐原生 systemd 部署，MediaMTX 锁定 **1.21.1**。OBS 输入 H.264＋AAC，服务不转码、不录制；公开 RTSP/TCP 入口执行鉴权并提供已验证的 **1000 ms 固定缓冲与时间戳匀速发送**。每位观看者默认有独立的 8 MiB 队列，按写入进展容忍短时拥塞；持续慢连接受内存与等待上限约束，详见 [拥塞恢复配置](docs/deployment.md#观看链路拥塞恢复)。默认推流上限 4000 Kbps，适合视频 3200 Kbps＋音频 128–160 Kbps。
 
 本地完整服务准备：
 

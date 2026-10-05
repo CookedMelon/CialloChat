@@ -70,6 +70,8 @@ def doctor(store, validation=False):
 
 def check_ports(settings):
     host = '127.0.0.1' if settings['mode'] == 'local' and not settings.get('local_network') else settings['bind_address']
+    if settings.get('reverse_proxy_enabled'):
+        host = '127.0.0.1'
     keys = ['rtsp_port', 'api_port', 'rtmp_port' if settings['mode'] == 'local' else 'rtmps_port']
     if settings.get('service_backend') == 'systemd':
         settings = dict(settings, auth_port=settings.get('auth_port', 9000))

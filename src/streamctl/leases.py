@@ -99,6 +99,34 @@ class Leases:
                    '(username,policy_hash,active_hash,started,expires) VALUES (?,?,?,?,0)',
                    (username, policy_hash, active_hash, now))
 
+    def refresh_time(self, username, policy_hash, now=None, meter_now=None):
+        """Restore allowance without generating a key or revoking active sessions."""
+        meter_now = time.monotonic() if meter_now is None else meter_now
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            record = db.execute('SELECT * FROM credential_vault WHERE username=?', (username,)).fetchone()
+            if record is None or record['policy_hash'] != policy_hash:
+                raise ValueError('当前推流凭据未存档，无法保持密码重置时长')
+            row = db.execute('SELECT * FROM leases WHERE username=?', (username,)).fetchone()
+            if row is not None and row['policy_hash'] != policy_hash:
+                row = None
+            active_hash = row['active_hash'] if row else policy_hash
+            # At expiry, list/info expose the delivered next key as the current
+            # usable key. Retain that key rather than resurrecting its predecessor.
+            if (row and self.remaining(row, meter_now) <= 0
+                    and row['delivered'] and row['pending_hash'] and row['pending_key']):
+                active_hash = row['pending_hash']
+                db.execute('UPDATE credential_vault SET publish_hash=?,publish_key=? WHERE username=?',
+                           (active_hash, row['pending_key'], username))
+            elif record['publish_hash'] != active_hash or not record['publish_key']:
+                raise ValueError('当前推流凭据未存档，无法保持密码重置时长')
+            self.reset(db, username, policy_hash, active_hash, self.now(db, now))
+            db.execute('DELETE FROM sessions WHERE username=? AND token_hash<>?', (username, active_hash))
+            if row and row['active_hash'] == active_hash and self.online(row, meter_now):
+                # Continue metering from this instant, with no reconnect required.
+                db.execute('UPDATE leases SET meter_at=?,meter_boot=?,online_ids=? WHERE username=?',
+                           (meter_now, BOOT_ID, row['online_ids'], username))
+
     @contextlib.contextmanager
     def connection(self):
         db = sqlite3.connect(self.path, timeout=2)
@@ -312,21 +340,29 @@ def send_message(config, message):
 
 
 def send_account_notice(config, username, publish_key, read_key, publish_base,
-                        read_base, event, identifier, recipient=None, test_url=None):
+                        read_base, event, identifier, recipient=None, test_url=None, reason='manual'):
     config = validate_mail(config)
     path = '/live/' + username
     publish_url = publish_base.rstrip('/') + path
     read_url = read_base.rstrip('/') + path
     if not read_url.startswith('rtsp://'):
         raise ValueError('观看通知必须使用 rtsp 地址')
-    # Keep refresh notices identical, including older queued notifications.
+    # Keep the full credential template while identifying why it was refreshed.
     event = 'CialloChat用户创建' if event == 'CialloChat用户创建' else 'CialloChat密码刷新'
     message = EmailMessage()
     message['Subject'] = event
     message['From'] = config['from']
     message['To'] = recipient or config['recipients'][username]
     message['Message-ID'] = f'<{hashlib.sha256(identifier.encode()).hexdigest()}@ciallochat.local>'
-    lines = [event, f'用户名：{username}',
+    lines = [event]
+    if event != 'CialloChat用户创建':
+        reasons = {'automatic': '当前密钥接近使用上限，自动刷新。',
+                   'manual': '密码已被管理员更新。',
+                   'time': '推流密钥使用时长已被管理员重置为两小时。'}
+        if reason not in reasons:
+            raise ValueError('非法密码通知类型')
+        lines.append(reasons[reason])
+    lines += [f'用户名：{username}',
              f'推流密码：{publish_key or "当前密码已过期，请刷新推流密码"}',
              f'观看密码：{read_key or "未保存，请联系管理员"}', '']
     if publish_key:
@@ -354,4 +390,4 @@ def send_notice(config, notice, publish_base, read_base=None, test_url=None):
         read_base = 'rtsp://' + host + ':8554'
     send_account_notice(config, notice['username'], notice['key'], notice.get('read_key'),
                         publish_base, read_base, 'CialloChat密码刷新', notice['hash'],
-                        recipient=notice.get('email'), test_url=test_url)
+                        recipient=notice.get('email'), test_url=test_url, reason='automatic')

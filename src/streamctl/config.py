@@ -10,9 +10,27 @@ import subprocess
 import tempfile
 import yaml
 from .accounts import HASHER, hash_password, new_password, validate_accounts, validate_password, validate_hash, read_identity
+from .urls import public_urls
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = json.loads((ROOT / "config/version.json").read_text())
+RTSP_BUFFER_DEFAULTS = {
+    'rtsp_max_buffer_bytes': 8 * 1024 * 1024,
+    'rtsp_write_timeout_seconds': 10,
+    'rtsp_write_max_wait_seconds': 30,
+}
+
+
+def buffer_limits(settings):
+    values = {key: settings.get(key, default) for key, default in RTSP_BUFFER_DEFAULTS.items()}
+    size = values['rtsp_max_buffer_bytes']
+    idle, maximum = (values[key] for key in ('rtsp_write_timeout_seconds', 'rtsp_write_max_wait_seconds'))
+    if type(size) is not int or not 65536 <= size <= 16 * 1024 * 1024:
+        raise ValueError('RTSP 队列上限须为 65536–16777216 字节')
+    if (type(idle) not in (int, float) or not 0.1 <= idle <= 30
+            or type(maximum) not in (int, float) or not idle <= maximum <= 60):
+        raise ValueError('RTSP 写入停滞超时须为 0.1–30 秒，总等待上限须不小于停滞超时且不超过 60 秒')
+    return values
 
 
 def atomic_write(path, data, mode=0o600):
@@ -110,6 +128,14 @@ def validate_settings(settings):
         raise ValueError('control_enabled 须为布尔值')
     if type(settings.get('test_video_enabled', False)) is not bool:
         raise ValueError('test_video_enabled 须为布尔值')
+    if type(settings.get('reverse_proxy_enabled', False)) is not bool:
+        raise ValueError('reverse_proxy_enabled 须为布尔值')
+    if settings.get('reverse_proxy_enabled') and (settings['mode'] != 'production'
+            or settings.get('service_backend') != 'systemd' or not settings.get('rtsp_buffer_ms')):
+        raise ValueError('反向代理需要 production、systemd 和 RTSP 缓冲入口')
+    for name in ('public_rtmps_port', 'public_rtsp_port'):
+        if name in settings and (type(settings[name]) is not int or not 1 <= settings[name] <= 65535):
+            raise ValueError('公开端口须在 1–65535')
     ports = [settings.get(k) for k in ("rtmp_port", "rtmps_port", "rtsp_port", "api_port")]
     if any(type(p) is not int or not 1024 <= p <= 65535 for p in ports) or len(set(ports)) != 4:
         raise ValueError("端口须在 1024–65535 且互不重复")
@@ -119,6 +145,7 @@ def validate_settings(settings):
     buffer_ms = settings.get('rtsp_buffer_ms', 0)
     if type(buffer_ms) is not int or (buffer_ms != 0 and not 100 <= buffer_ms <= 3000):
         raise ValueError('RTSP 缓冲须为 0 或 100–3000 毫秒')
+    buffer_limits(settings)
     if buffer_ms:
         if settings.get('service_backend') != 'systemd':
             raise ValueError('RTSP 缓冲需要原生 systemd 后端')
@@ -131,24 +158,14 @@ def validate_settings(settings):
     if type(limit) is not int or not 100 <= limit <= 1000000:
         raise ValueError('每路推流上限须为 100–1000000 Kbps，不能关闭')
     ipaddress.ip_address(settings["bind_address"])
-    hostname = settings["hostname"]
-    if not isinstance(hostname, str) or not hostname or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in hostname):
-        raise ValueError("非法服务主机名")
+    for hostname in (settings['hostname'], settings.get('read_hostname', settings['hostname'])):
+        if not isinstance(hostname, str) or not hostname or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in hostname):
+            raise ValueError("非法服务主机名")
     for key in ("certificate", "private_key"):
         path = Path(settings[key])
         if path.is_absolute() or len(path.parts) != 2 or path.parts[0] != "certs" or path.name in (".", ".."):
             raise ValueError("证书必须位于 runtime/certs，使用 certs/文件名")
     return settings
-
-
-def public_urls(settings):
-    scheme = 'rtmps' if settings['mode'] == 'production' else 'rtmp'
-    host = settings['hostname'] if settings['mode'] == 'production' or settings.get('local_network') else '127.0.0.1'
-    if ':' in host:
-        host = '[' + host + ']'
-    return dict(publish_base=f'{scheme}://{host}:{settings["rtmps_port" if scheme == "rtmps" else "rtmp_port"]}',
-                read_base=f'rtsp://{host}:{settings["rtsp_port"]}',
-                test_url=f'rtsp://{host}:{settings["rtsp_port"]}/test' if settings.get('test_video_enabled') else None)
 
 
 def write_watchdog_config(store, settings, control):
@@ -185,6 +202,9 @@ def render(settings, accounts, control, *, legacy_validation=False, legacy_authe
         config['authHTTPAddress'] = f'http://127.0.0.1:{settings.get("auth_port", 9000)}/auth'
         config['apiAddress'] = f'127.0.0.1:{settings["api_port"]}'
         host = '127.0.0.1' if settings['mode'] == 'local' and not settings.get('local_network') else settings['bind_address']
+        if settings.get('reverse_proxy_enabled'):
+            host = '127.0.0.1'
+            config['rtmpTrustedProxies'] = ['127.0.0.1/32']
         if ':' in host:
             host = '['+host+']'
         config['rtspAddress'] = (f'127.0.0.1:{settings.get("rtsp_internal_port", 18554)}'

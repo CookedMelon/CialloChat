@@ -85,6 +85,7 @@ def main():
                '  cialloctl refresh alice all\n'
                '  cialloctl refresh alice push\n'
                '  cialloctl refresh alice pull\n'
+               '  cialloctl refresh alice time\n'
                '  cialloctl --json list\n'
                '  cialloctl help refresh')
     parser.add_argument('--config', default=str(Path(__file__).resolve().parents[2]/'config/control-client.json'),
@@ -100,11 +101,12 @@ def main():
     delete.add_argument('user', help='用户名')
     add = sub.add_parser('add', help='创建用户及两类密码，并发送通知邮件')
     add.add_argument('user', help='用户名'); add.add_argument('email', help='接收密码通知的邮箱')
-    refresh = sub.add_parser('refresh', help='刷新指定密码并发送通知邮件',
-                             description='all：刷新全部密码；push：仅刷新推流密码；pull：仅刷新观看密码。\n'
+    refresh = sub.add_parser('refresh', help='刷新密码或恢复推流使用时长，并发送通知邮件',
+                             description='all：刷新全部密码；push：仅刷新推流密码；pull：仅刷新观看密码；\n'
+                                         'time：保留当前密码，将推流剩余使用时长恢复至两小时。\n'
                                          'all/push 重置为两小时累计推流额度，停推不计时；pull 保留推流剩余额度。')
     refresh.add_argument('user', help='用户名')
-    refresh.add_argument('kind', choices=['all', 'push', 'pull'], help='刷新范围：全部、推流或观看密码')
+    refresh.add_argument('kind', choices=['all', 'push', 'pull', 'time'], help='刷新范围：全部、推流、观看密码，或仅恢复推流时长')
     traffic = sub.add_parser('traffic', help='最近一小时的流量柱状图、文字总计及管理员邮件',
                              description='默认查询最近六个已结束的十分钟区间；自定义时间限最近七天，需按整十分钟对齐。')
     traffic.add_argument('--start', help='开始时间，例如 2026-10-04 09:00；默认使用本机时区，可附 +09:00')
@@ -168,6 +170,15 @@ def main():
             if result.get('email_status') == 'queued':
                 print('邮件暂未发出，已保存通知并自动重试。')
         return 0
+    except ssl.SSLCertVerificationError:
+        print('控制连接的 TLS 证书校验失败：请检查服务域名、证书、CA 配置和系统时间；未自动重复执行命令。', file=sys.stderr)
+        return 1
+    except ssl.SSLError:
+        print('控制连接的 TLS 握手或通信失败：请检查 Python/OpenSSL 环境和网络代理；未自动重复执行命令。', file=sys.stderr)
+        return 1
+    except TimeoutError:
+        print('控制连接或响应超时：请检查网络代理、控制端口和服务器状态；未自动重复执行命令。', file=sys.stderr)
+        return 1
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1

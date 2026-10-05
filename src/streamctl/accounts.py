@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timezone
 from argon2 import PasswordHasher, extract_parameters, Type
 from argon2.exceptions import VerifyMismatchError
+from .urls import public_urls
 
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1, hash_len=32, salt_len=16)
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}\Z")
@@ -39,23 +40,19 @@ def read_identity(username):
 
 def credentials(settings, username, publish_key=None, read_key=None):
     import urllib.parse
-    host = settings['hostname'] if settings['mode'] == 'production' or settings.get('local_network') else '127.0.0.1'
-    if ':' in host:
-        host = '[' + host + ']'
+    urls = public_urls(settings)
     result = {'username': username, 'stream_path': 'live/' + username}
     if publish_key is not None:
-        scheme = 'rtmps' if settings['mode'] == 'production' else 'rtmp'
-        port = settings['rtmps_port' if scheme == 'rtmps' else 'rtmp_port']
         query = urllib.parse.urlencode({'user': username, 'pass': publish_key})
         result.update(publish_username=username, publish_key=publish_key, password=publish_key,
-                      publish_url=f'{scheme}://{host}:{port}/live/{username}?{query}')
+                      publish_url=f'{urls["publish_base"]}/live/{username}?{query}')
     if read_key is not None:
         identity = read_identity(username)
         encoded = urllib.parse.quote(read_key, safe='')
-        url = f'rtsp://{host}:{settings["rtsp_port"]}/live/{username}?read_key={encoded}'
+        url = f'{urls["read_base"]}/live/{username}?read_key={encoded}'
         result.update(read_username=identity, read_key=read_key,
                       read_url=url, vrchat_read_url=url,
-                      legacy_read_url=f'rtsp://{identity}:{encoded}@{host}:{settings["rtsp_port"]}/live/{username}')
+                      legacy_read_url=f'rtsp://{identity}:{encoded}@{urls["read_base"][7:]}/live/{username}')
     return result
 
 

@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Resolve symlinks so the default configuration stays inside the project."""
 from pathlib import Path
+import os
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'src'))
+project = Path(__file__).resolve().parents[1]
+environment = project/'.venv'
+python = environment/'bin/python'
+# Shell activation (for example Conda base) must not change the project's TLS
+# runtime. Re-exec before importing the client; no command has been sent yet.
+if python.is_file() and os.access(python, os.X_OK) and Path(sys.prefix).resolve() != environment.resolve():
+    os.execv(str(python), [str(python), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+sys.path.insert(0, str(project/'src'))
 from streamctl.controlclient import main
 
 raise SystemExit(main())

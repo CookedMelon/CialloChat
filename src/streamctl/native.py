@@ -160,14 +160,16 @@ def up(service):
         guard = ('[Unit]\nDescription=CialloChat media connection rate limit\n'
                  'Before=ciallochat-mediamtx.service\n\n[Service]\nType=oneshot\n'
                  f'ExecStart=/bin/bash {root}/scripts/native-connection-guard.sh '
-                 f'{settings["rtmps_port"]} {settings["rtsp_port"]}\nRemainAfterExit=true\n'
+                 f'{settings.get("public_rtmps_port", 443) if settings.get("reverse_proxy_enabled") else settings["rtmps_port"]} '
+                 f'{settings.get("public_rtsp_port", 554) if settings.get("reverse_proxy_enabled") else settings["rtsp_port"]}\nRemainAfterExit=true\n'
                  '\n[Install]\nWantedBy=multi-user.target\n')
         atomic_write(directory/'ciallochat-connection-guard.service', guard, mode=0o644)
     cmd = manager(settings)
     run(cmd+['daemon-reload'])
     try:
         if settings.get('native_connection_guard'):
-            run(cmd+['enable', '--now', 'ciallochat-connection-guard'])
+            run(cmd+['enable', 'ciallochat-connection-guard'])
+            run(cmd+['restart', 'ciallochat-connection-guard'])
         # Restart on up so changed units/configurations are actually loaded.
         run(cmd+['enable', *commands])
         run(cmd+['restart', UNITS[0]])
@@ -187,6 +189,8 @@ def up(service):
                 [config.get('port', 15347)] if settings.get('control_enabled') else []):
             host = ('127.0.0.1' if settings['bind_address'] in ('0.0.0.0', '::')
                     or settings['mode'] == 'local' and not settings.get('local_network') else settings['bind_address'])
+            if settings.get('reverse_proxy_enabled') and port == settings['rtsp_port']:
+                host = '127.0.0.1'
             def listening():
                 with socket.create_connection((host, port), timeout=1):
                     return True

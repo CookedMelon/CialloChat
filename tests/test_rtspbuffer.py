@@ -1,11 +1,14 @@
 import asyncio
+import socket
 import struct
+import time
 import unittest
 import urllib.parse
 from types import SimpleNamespace
 
 from streamctl.rtspbuffer import BufferFull, ByteQueue, Message, Session, Timing, read_message
 from streamctl.relayauth import reader_request
+from streamctl.config import RTSP_BUFFER_DEFAULTS, buffer_limits
 
 
 def configuration(**overrides):
@@ -28,6 +31,16 @@ def response(cseq, headers='', body=b''):
 
 
 class ClockTests(unittest.TestCase):
+    def test_recovery_limits_are_bounded_and_validate_numeric_values(self):
+        self.assertEqual(buffer_limits({}), RTSP_BUFFER_DEFAULTS)
+        for overrides in ({'rtsp_max_buffer_bytes': True}, {'rtsp_max_buffer_bytes': 17 * 1024 * 1024},
+                          {'rtsp_write_timeout_seconds': float('nan')},
+                          {'rtsp_write_timeout_seconds': float('inf')},
+                          {'rtsp_write_max_wait_seconds': 9}, {'rtsp_write_max_wait_seconds': 61},
+                          {'rtsp_write_timeout_seconds': True}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                buffer_limits(overrides)
+
     def test_tracks_with_same_payload_number_keep_their_own_clock_rates(self):
         timing = Timing(1)
         timing.sdp(b'v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n'
@@ -107,7 +120,216 @@ class Writer:
         return ('192.168.1.2', 12345)
 
 
+class BlockedWriter(Writer):
+    def __init__(self):
+        super().__init__()
+        self.transport = self
+        self.pending = 0
+        self.release = asyncio.Event()
+        self.entered = asyncio.Event()
+        self.cancelled = False
+
+    def write(self, data):
+        super().write(data)
+        self.pending += len(data)
+
+    def get_write_buffer_size(self):
+        return self.pending
+
+    async def drain(self):
+        self.entered.set()
+        try:
+            await self.release.wait()
+            self.pending = 0
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 class AsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_tcp_reader_pause_resumes_on_same_connection_with_identical_rtp(self):
+        packets = [frame(0, rtp(90000, seq=i, payload=b'\x7c\x85' + b'x' * 12000))
+                   for i in range(240)]
+        config = configuration(max_buffer_bytes=8 * 1024 * 1024, write_timeout=10, write_max_wait=30)
+        sessions, tasks, events = [], [], []
+        connected = asyncio.Event()
+        async def accept(reader, writer):
+            writer.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
+            writer.transport.set_write_buffer_limits(high=8192, low=4096)
+            session = Session(config, reader, writer, lambda **event: events.append(event))
+            session.rtp_channels = {0}
+            session.timing.rates = {96: 90000}
+            for packet in packets:
+                deadline, clock, elapsed = session.timing.rtp(0, packet[4:], time.monotonic() - 1)
+                session.queue.put(Message(packet, 0, deadline, clock, elapsed))
+            sessions.append(session)
+            tasks.append(asyncio.create_task(session.send_media()))
+            connected.set()
+        server = await asyncio.start_server(accept, '127.0.0.1', 0)
+        writer = None
+        try:
+            client_socket = socket.socket()
+            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+            client_socket.setblocking(False)
+            await asyncio.get_running_loop().sock_connect(client_socket, server.sockets[0].getsockname())
+            reader, writer = await asyncio.open_connection(sock=client_socket, limit=16384)
+            writer.transport.pause_reading()
+            await asyncio.wait_for(connected.wait(), 1)
+            await asyncio.sleep(3.1)
+            self.assertFalse(tasks[0].done())
+            self.assertIsNotNone(sessions[0].write_started)
+            self.assertIn('write_blocked', [event['event'] for event in events])
+            writer.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+            sessions[0].writer.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
+            sessions[0].writer.transport.set_write_buffer_limits(high=65536, low=16384)
+            writer.transport.resume_reading()
+            expected = b''.join(packets)
+            received = await asyncio.wait_for(reader.readexactly(len(expected)), 10)
+            self.assertEqual(received, expected)
+            async def writes_finished():
+                while sessions[0].sent_packets != len(packets):
+                    if tasks[0].done():
+                        tasks[0].result()
+                    await asyncio.sleep(.01)
+            await asyncio.wait_for(writes_finished(), 1)
+            self.assertEqual(sessions[0].sent_packets, len(packets))
+            self.assertGreater(sessions[0].max_drain, 2)
+            self.assertEqual(sessions[0].write_timeouts, 0)
+        finally:
+            server.close()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if writer is not None:
+                writer.transport.abort()
+                await asyncio.wait_for(writer.wait_closed(), 1)
+            for session in sessions:
+                session.writer.transport.abort()
+                await asyncio.wait_for(session.writer.wait_closed(), 1)
+            await asyncio.wait_for(server.wait_closed(), 1)
+
+    async def test_more_than_two_second_stall_recovers_without_packet_loss_or_affecting_other_reader(self):
+        limits = buffer_limits({})
+        config = configuration(max_buffer_bytes=limits['rtsp_max_buffer_bytes'],
+                               write_timeout=limits['rtsp_write_timeout_seconds'],
+                               write_max_wait=limits['rtsp_write_max_wait_seconds'])
+        slow_writer, fast_writer = BlockedWriter(), Writer()
+        events = []
+        slow = Session(config, None, slow_writer, lambda **event: events.append(event))
+        fast = Session(config, None, fast_writer, lambda **event: None)
+        packets = [frame(0, rtp(90000, seq=i, payload=b'\x7c\x85' + b'x' * 12000))
+                   for i in range(240)]
+        for session in (slow, fast):
+            session.rtp_channels = {0}
+            session.timing.rates = {96: 90000}
+            # Already paced fragments of one access unit, all with one timestamp.
+            for packet in packets:
+                deadline, clock, elapsed = session.timing.rtp(0, packet[4:], time.monotonic() - 1)
+                session.queue.put(Message(packet, 0, deadline, clock, elapsed))
+        tasks = [asyncio.create_task(session.send_media()) for session in (slow, fast)]
+        try:
+            await asyncio.wait_for(slow_writer.entered.wait(), 1)
+            await asyncio.sleep(2.2)
+            self.assertFalse(tasks[0].done())
+            self.assertGreater(slow.queue.bytes, 2 * 1024 * 1024)
+            self.assertEqual(fast.sent_packets, len(packets))
+            self.assertEqual(fast_writer.writes, packets)
+            slow_writer.release.set()
+            async def recovered():
+                while slow.sent_packets != len(packets):
+                    await asyncio.sleep(.01)
+            await asyncio.wait_for(recovered(), 2)
+            self.assertEqual(slow_writer.writes, packets)
+            self.assertEqual(slow.queue.bytes, 0)
+            self.assertGreater(slow.max_drain, 2)
+            self.assertEqual(slow.write_timeouts, 0)
+            self.assertEqual(slow.write_backpressure_events, 1)
+            self.assertIn('write_recovered', [event['event'] for event in events])
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def test_transport_progress_extends_idle_deadline(self):
+        writer = BlockedWriter()
+        events = []
+        session = Session(configuration(write_timeout=.12, write_max_wait=.7), None, writer,
+                          lambda **event: events.append(event))
+        task = asyncio.create_task(session.write(b'x' * 1000))
+        try:
+            await writer.entered.wait()
+            for _ in range(5):
+                await asyncio.sleep(.05)
+                writer.pending -= 100
+            self.assertFalse(task.done())
+            writer.release.set()
+            await asyncio.wait_for(task, .5)
+            self.assertEqual(writer.writes, [b'x' * 1000])
+            self.assertEqual(session.write_timeouts, 0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_no_progress_closes_with_diagnostic_and_cancels_drain(self):
+        writer = BlockedWriter()
+        events = []
+        session = Session(configuration(write_timeout=.08, write_max_wait=.5), None, writer,
+                          lambda **event: events.append(event))
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(session.write(b'pending'), 1)
+        self.assertTrue(writer.cancelled)
+        self.assertIsNone(session.write_started)
+        self.assertGreaterEqual(session.max_drain, .08)
+        timeout = next(event for event in events if event['event'] == 'write_timeout')
+        self.assertEqual(timeout['timeout_kind'], 'no_progress')
+        self.assertEqual(timeout['direction'], 'reader')
+        self.assertEqual(timeout['pending_write_bytes'], 7)
+
+    async def test_trickling_progress_still_has_total_wait_limit(self):
+        writer = BlockedWriter()
+        events = []
+        session = Session(configuration(write_timeout=.12, write_max_wait=.3), None, writer,
+                          lambda **event: events.append(event))
+        async def trickle():
+            await writer.entered.wait()
+            while True:
+                await asyncio.sleep(.03)
+                writer.pending -= 1
+        progress = asyncio.create_task(trickle())
+        try:
+            with self.assertRaises(TimeoutError):
+                await asyncio.wait_for(session.write(b'x' * 1000), 1)
+            timeout = next(event for event in events if event['event'] == 'write_timeout')
+            self.assertEqual(timeout['timeout_kind'], 'total_wait')
+            self.assertLess(timeout['stalled_ms'], 120)
+            self.assertTrue(writer.cancelled)
+        finally:
+            progress.cancel()
+            await asyncio.gather(progress, return_exceptions=True)
+
+    async def test_cancellation_and_control_writes_do_not_duplicate_or_interleave_frames(self):
+        writer = BlockedWriter()
+        session = Session(configuration(), None, writer, lambda **event: None)
+        media, control = frame(0, rtp(90000)), response(9)
+        first = asyncio.create_task(session.write(media))
+        second = None
+        try:
+            await writer.entered.wait()
+            second = asyncio.create_task(session.write(control))
+            await asyncio.sleep(.02)
+            self.assertEqual(writer.writes, [media])
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+            writer.release.set()
+            await asyncio.wait_for(second, .5)
+            self.assertTrue(writer.cancelled)
+            self.assertEqual(writer.writes, [media, control])
+        finally:
+            first.cancel()
+            if second is not None:
+                second.cancel()
+            await asyncio.gather(*[t for t in (first, second) if t is not None], return_exceptions=True)
+
     async def test_udp_rejection_allows_tcp_retry_on_same_connection(self):
         writer = Writer()
         session = Session(configuration(), asyncio.StreamReader(), writer, lambda **event: None)

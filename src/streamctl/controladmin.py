@@ -131,7 +131,7 @@ class Administration:
                 return dict(ok=True, users=users)
             if (not command or command[0] not in ('add', 'del', 'refresh')
                     or len(command) != (2 if command[0] == 'del' else 3)):
-                raise ValueError('支持 list、info <user>、del <user>、add <user> <email>、refresh <user> all|push|pull')
+                raise ValueError('支持 list、info <user>、del <user>、add <user> <email>、refresh <user> all|push|pull|time')
             action, name = command[:2]
             validate_username(name)
             user = next((u for u in accounts['users'] if u['username'] == name), None)
@@ -157,38 +157,41 @@ class Administration:
                 event, scope = 'CialloChat用户创建', 'all'
             else:
                 scope = command[2]
-                if scope not in ('all', 'push', 'pull'): raise ValueError('刷新类型须为 all、push 或 pull')
+                if scope not in ('all', 'push', 'pull', 'time'): raise ValueError('刷新类型须为 all、push、pull 或 time')
                 if user is None: raise ValueError('账号不存在')
                 current = next(u for u in self.users(accounts) if u['username'] == name)
                 email = validate_email(current['email'])
-                # A push-only operation preserves the permanent read key, and
-                # a pull-only operation preserves the cumulative publishing allowance.
-                if scope in ('all', 'push'):
-                    push = new_password()
-                    user['publish_key_hash'] = hash_password(push)
+                if scope == 'time':
+                    self.leases.refresh_time(name, user['publish_key_hash'])
                 else:
-                    push = current['push_password']
-                if scope in ('all', 'pull'):
-                    pull = new_password()
-                    user['read_key_hash'] = hash_password(pull)
-                else:
-                    pull = current['pull_password']
-                if scope == 'push' and pull is None:
-                    raise ValueError('观看密码未存档，请先使用 refresh all 完成凭据迁移')
-                user['updated_at'] = timestamp()
-                states = ('publish', 'read') if scope == 'all' else (('publish',) if scope == 'push' else ('read',))
-                commit(self.store, accounts, revoke=[user['stream_path']], service=service, revoke_states=states)
-                if scope in ('all', 'push'):
-                    self.register_credentials(user, push, pull, email, reset_timer=True)
-                else:
-                    with self.leases.connection() as db:
-                        # Do not change publisher generation or remaining time.
-                        db.execute('UPDATE credential_vault SET read_hash=?,read_key=? WHERE username=?',
-                                   (user['read_key_hash'], pull, name))
-                        if db.execute('SELECT changes()').fetchone()[0] == 0:
-                            db.execute('INSERT INTO credential_vault VALUES (?,?,?,?,?,?,?)',
-                                       (name, user['publish_key_hash'], user['publish_key_hash'], '',
-                                        user['read_key_hash'], pull, email))
+                    # A push-only operation preserves the permanent read key, and
+                    # a pull-only operation preserves the cumulative publishing allowance.
+                    if scope in ('all', 'push'):
+                        push = new_password()
+                        user['publish_key_hash'] = hash_password(push)
+                    else:
+                        push = current['push_password']
+                    if scope in ('all', 'pull'):
+                        pull = new_password()
+                        user['read_key_hash'] = hash_password(pull)
+                    else:
+                        pull = current['pull_password']
+                    if scope == 'push' and pull is None:
+                        raise ValueError('观看密码未存档，请先使用 refresh all 完成凭据迁移')
+                    user['updated_at'] = timestamp()
+                    states = ('publish', 'read') if scope == 'all' else (('publish',) if scope == 'push' else ('read',))
+                    commit(self.store, accounts, revoke=[user['stream_path']], service=service, revoke_states=states)
+                    if scope in ('all', 'push'):
+                        self.register_credentials(user, push, pull, email, reset_timer=True)
+                    else:
+                        with self.leases.connection() as db:
+                            # Do not change publisher generation or remaining time.
+                            db.execute('UPDATE credential_vault SET read_hash=?,read_key=? WHERE username=?',
+                                       (user['read_key_hash'], pull, name))
+                            if db.execute('SELECT changes()').fetchone()[0] == 0:
+                                db.execute('INSERT INTO credential_vault VALUES (?,?,?,?,?,?,?)',
+                                           (name, user['publish_key_hash'], user['publish_key_hash'], '',
+                                            user['read_key_hash'], pull, email))
                 event = 'CialloChat密码刷新'
             with self.leases.connection() as db:
                 record = db.execute('SELECT * FROM credential_vault WHERE username=?', (name,)).fetchone()
@@ -201,7 +204,9 @@ class Administration:
                 # at delivery; keep independent push/pull changes in the queue.
                 db.execute('INSERT INTO mail_outbox VALUES (?,?,?,0)', (job, name, json.dumps(payload)))
         sent = self.deliver_job(job)
-        return dict(ok=True, message=f'用户 {name} 已' + ('创建' if action == 'add' else '刷新密码') + '。',
+        message = (f'用户 {name} 的推流密码使用时长已恢复为两小时。' if scope == 'time'
+                   else f'用户 {name} 已' + ('创建' if action == 'add' else '刷新密码') + '。')
+        return dict(ok=True, message=message,
                     email_status='sent' if sent else 'queued')
 
     def deliver_job(self, job):
@@ -215,7 +220,7 @@ class Administration:
                 record = db.execute('SELECT * FROM credential_vault WHERE username=?', (row['username'],)).fetchone()
             user = next((u for u in accounts['users'] if u['username'] == row['username']), None)
             stale = user is None or record is None
-            if not stale and payload['scope'] in ('all', 'push'):
+            if not stale and payload['scope'] in ('all', 'push', 'time'):
                 stale |= (user['publish_key_hash'] != payload['policy_hash']
                           or record['publish_hash'] != payload['publish_hash'])
             if not stale and payload['scope'] in ('all', 'pull'):
@@ -234,7 +239,8 @@ class Administration:
                 urls = public_urls(settings)
                 send_account_notice(config, row['username'], keys['push_password'], keys['pull_password'],
                                     urls['publish_base'], urls['read_base'], payload['event'], job,
-                                    payload['email'], test_url=urls['test_url'])
+                                    payload['email'], test_url=urls['test_url'],
+                                    reason='time' if payload['scope'] == 'time' else 'manual')
             except Exception:
                 print('control notification failed; retry queued; credentials omitted', flush=True)
                 return False

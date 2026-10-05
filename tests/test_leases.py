@@ -269,6 +269,8 @@ class PublisherLeases(unittest.TestCase):
             client.login.assert_called_once_with('s@example.com', 'smtp-authorization-code')
             message = client.send_message.call_args.args[0]
             self.assertEqual(message['To'], 'r@example.com')
+            self.assertEqual(message.get_content().splitlines()[:3], ['CialloChat密码刷新',
+                             '当前密钥接近使用上限，自动刷新。', '用户名：cc'])
             self.assertIn('pass=new-key-with%26special%23characters', message.get_content())
             self.assertNotIn('smtp-authorization-code', message.get_content())
 

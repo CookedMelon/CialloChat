@@ -8,6 +8,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 import json
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,30 @@ import time
 import urllib.parse
 from collections import OrderedDict
 from .relayauth import load_secret, signed_query
+
+
+async def proxy_peer(reader, peer):
+    """Read the Nginx PROXY v1 header only from a trusted loopback socket."""
+    if not peer or not ipaddress.ip_address(peer[0]).is_loopback:
+        raise ValueError('untrusted proxy peer')
+    # PROXY v1 is at most 107 bytes including CRLF. Bound reads before parsing.
+    header = bytearray()
+    async with asyncio.timeout(3):
+        while not header.endswith(b'\r\n'):
+            if len(header) >= 107:
+                raise ValueError('proxy header too long')
+            header += await reader.readexactly(1)
+    fields = header.decode('ascii').strip().split()
+    if len(fields) != 6 or fields[0] != 'PROXY' or fields[1] not in ('TCP4', 'TCP6'):
+        raise ValueError('invalid proxy header')
+    source, destination = map(ipaddress.ip_address, fields[2:4])
+    version = 4 if fields[1] == 'TCP4' else 6
+    if source.version != version or destination.version != version:
+        raise ValueError('proxy address family mismatch')
+    ports = [int(value) for value in fields[4:]]
+    if not all(1 <= port <= 65535 for port in ports):
+        raise ValueError('invalid proxy port')
+    return str(source), ports[0]
 
 
 class BufferFull(ConnectionError):
@@ -201,8 +226,9 @@ async def read_message(reader, max_body=65536, max_frame=65535, allow_media=True
 
 
 class Session:
-    def __init__(self, config, reader, writer, logger):
+    def __init__(self, config, reader, writer, logger, peer=None):
         self.config, self.reader, self.writer, self.log = config, reader, writer, logger
+        self.peer = peer or (writer.get_extra_info('peername') if writer is not None else None)
         self.id = str(time.time_ns())
         self.queue = ByteQueue(config.max_buffer_bytes)
         self.timing = Timing(config.buffer_ms / 1000)
@@ -214,6 +240,10 @@ class Session:
         self.pending_setup = {}
         self.sent_packets = 0
         self.max_drain = 0.0
+        self.max_upstream_drain = 0.0
+        self.write_started = None
+        self.write_backpressure_events = 0
+        self.write_timeouts = 0
         self.tasks = []
         self.upstream = None
         self.route = None
@@ -227,7 +257,8 @@ class Session:
     def test_target(self, value):
         u = urllib.parse.urlsplit(value)
         return (u.scheme == 'rtsp' and u.hostname in self.config.public_hosts
-                and u.port == self.config.listen_port and not u.username and not u.password
+                and (u.port if u.port is not None else 554) == getattr(self.config, 'public_port', self.config.listen_port)
+                and not u.username and not u.password
                 and re.fullmatch(r'/test(?:/trackID=[01]|/)?', u.path))
 
     async def prepare_test(self, target, method):
@@ -238,7 +269,7 @@ class Session:
             if self.route is not None and not self.route.startswith('/test/'):
                 raise ValueError('reader cannot switch into the test channel')
             if method == 'DESCRIBE' and self.test_grant is None:
-                self.test_grant = await channel.acquire(self.writer.get_extra_info('peername')[0], self.id)
+                self.test_grant = await channel.acquire(self.peer[0], self.id)
                 self.route = '/test/' + self.test_grant.token
                 self.test_event.set()
 
@@ -260,7 +291,8 @@ class Session:
                     path=route+suffix, query=urllib.parse.urlencode(query, doseq=True)))
             match = re.fullmatch(r'/live/([a-zA-Z0-9][a-zA-Z0-9_-]{0,47})(?:/trackID=[01]|/)?', u.path)
             if (u.scheme != 'rtsp' or u.hostname not in self.config.public_hosts
-                    or u.port != self.config.listen_port or not match or u.username or u.password):
+                    or (u.port if u.port is not None else 554) != getattr(self.config, 'public_port', self.config.listen_port)
+                    or not match or u.username or u.password):
                 raise ValueError('unexpected request target')
             route = '/live/' + match[1]
             if self.route is not None and route != self.route:
@@ -275,7 +307,7 @@ class Session:
                     self.reader_query[key] = query[key]
                 elif key in self.reader_query:
                     query[key] = self.reader_query[key]
-            query = signed_query(query, self.writer.get_extra_info('peername')[0], route.lstrip('/'),
+            query = signed_query(query, self.peer[0], route.lstrip('/'),
                                  self.config.proxy_secret)
             host = self.config.upstream_host
             host = '[' + host + ']' if ':' in host else host
@@ -286,12 +318,67 @@ class Session:
             path = '/test' + path[len(self.route):]
         return urllib.parse.urlunsplit(u._replace(netloc=self.public_origin, path=path, query=''))
 
+    @staticmethod
+    def pending_bytes(writer):
+        transport = getattr(writer, 'transport', None)
+        return transport.get_write_buffer_size() if transport is not None else None
+
+    async def drain(self, writer, direction):
+        """Allow transient backpressure while bounding stalls and total wait.
+
+        Progress is transport-buffer reduction, not merely receiving keepalives.
+        With Nginx this measures the local proxy socket, not viewer delivery ACKs.
+        """
+        idle = self.config.write_timeout
+        maximum = getattr(self.config, 'write_max_wait', max(30, idle))
+        before = last_progress = time.monotonic()
+        previous_size = self.pending_bytes(writer)
+        if direction == 'reader':
+            self.write_started = before
+        task = asyncio.create_task(writer.drain())
+        blocked = False
+        try:
+            while True:
+                if task.done():
+                    task.result()
+                    if blocked:
+                        self.log(connection=self.id, event='write_recovered', direction=direction,
+                                 waited_ms=round((time.monotonic() - before) * 1000, 2))
+                    return
+                now = time.monotonic()
+                size = self.pending_bytes(writer)
+                if size is not None and previous_size is not None and size < previous_size:
+                    last_progress = now
+                previous_size = size
+                remaining = min(idle - (now - last_progress), maximum - (now - before))
+                if remaining <= 0:
+                    self.write_timeouts += 1
+                    self.log(connection=self.id, event='write_timeout', direction=direction,
+                             timeout_kind='total_wait' if now - before >= maximum else 'no_progress',
+                             waited_ms=round((now - before) * 1000, 2),
+                             stalled_ms=round((now - last_progress) * 1000, 2),
+                             pending_write_bytes=size, queued_bytes=self.queue.bytes)
+                    raise TimeoutError('RTSP write limit exceeded')
+                if not blocked and now - before >= 0.5:
+                    blocked = True
+                    self.write_backpressure_events += 1
+                    self.log(connection=self.id, event='write_blocked', direction=direction,
+                             pending_write_bytes=size, queued_bytes=self.queue.bytes)
+                await asyncio.wait({task}, timeout=min(0.25, idle / 3, remaining))
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            duration = time.monotonic() - before
+            if direction == 'reader':
+                self.write_started = None
+                self.max_drain = max(self.max_drain, duration)
+            else:
+                self.max_upstream_drain = max(self.max_upstream_drain, duration)
+
     async def write(self, wire):
         async with self.write_lock:
             self.writer.write(wire)
-            before = time.monotonic()
-            await asyncio.wait_for(self.writer.drain(), self.config.write_timeout)
-            self.max_drain = max(self.max_drain, time.monotonic() - before)
+            await self.drain(self.writer, 'reader')
 
     async def client_control(self):
         while True:
@@ -323,7 +410,7 @@ class Session:
                 self.log(connection=self.id, method=method)
                 wire = '\r\n'.join(lines).encode() + body
             self.upstream.write(wire)
-            await asyncio.wait_for(self.upstream.drain(), self.config.write_timeout)
+            await self.drain(self.upstream, 'upstream')
 
     async def ingest(self, reader):
         while True:
@@ -421,6 +508,11 @@ class Session:
             self.log(connection=self.id, event='buffer_metrics', buffer_ms=self.config.buffer_ms,
                 queued_bytes=self.queue.bytes, peak_queued_bytes=self.queue.peak_bytes,
                 max_drain_ms=round(self.max_drain * 1000, 2), sent_rtp_packets=self.sent_packets,
+                write_blocked_ms=round((time.monotonic() - self.write_started) * 1000, 2)
+                    if self.write_started is not None else 0,
+                pending_write_bytes=self.pending_bytes(self.writer),
+                max_upstream_drain_ms=round(self.max_upstream_drain * 1000, 2),
+                write_backpressure_events=self.write_backpressure_events, write_timeouts=self.write_timeouts,
                 tracks=self.timing.metrics())
 
     async def admission_timeout(self):
@@ -437,19 +529,24 @@ class Session:
                 await asyncio.sleep(min(1, remaining))
 
     async def run(self):
+        failed_task = None
         try:
             upstream_reader, self.upstream = await asyncio.wait_for(
                 asyncio.open_connection(self.config.upstream_host, self.config.upstream_port, limit=32768), 3)
-            peer = self.writer.get_extra_info('peername')
+            peer = self.peer
             self.log(connection=self.id, event='open', peer=peer[0], peer_port=peer[1])
-            self.tasks = [asyncio.create_task(self.client_control()), asyncio.create_task(self.ingest(upstream_reader)),
-                          asyncio.create_task(self.send_media()), asyncio.create_task(self.report()),
-                          asyncio.create_task(self.admission_timeout()), asyncio.create_task(self.test_timeout())]
+            self.tasks = [asyncio.create_task(coroutine, name=name) for name, coroutine in (
+                ('client_control', self.client_control()), ('ingest', self.ingest(upstream_reader)),
+                ('send_media', self.send_media()), ('report', self.report()),
+                ('admission_timeout', self.admission_timeout()), ('test_timeout', self.test_timeout()))]
             done, _ = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
+                failed_task = task.get_name()
                 task.result()
         except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError, ValueError) as exc:
-            self.log(connection=self.id, event='closed', reason=type(exc).__name__)
+            self.log(connection=self.id, event='closed', reason=type(exc).__name__, task=failed_task,
+                     queued_bytes=self.queue.bytes, pending_write_bytes=self.pending_bytes(self.writer),
+                     max_drain_ms=round(self.max_drain * 1000, 2))
         finally:
             for task in self.tasks:
                 task.cancel()
@@ -473,24 +570,36 @@ async def serve(config):
     rates = OrderedDict()
     async def connect(reader, writer):
         peer = writer.get_extra_info('peername')
+        task = asyncio.current_task()
+        # Include incomplete proxy handshakes in the global connection bound.
+        if len(active) >= 8:
+            writer.close()
+            return
+        active.add(task)
+        try:
+            if getattr(config, 'proxy_protocol', False):
+                peer = await proxy_peer(reader, peer)
+            await admitted_connect(reader, writer, peer)
+        except (ValueError, UnicodeError, asyncio.IncompleteReadError, TimeoutError, ConnectionError):
+            writer.close()
+        finally:
+            active.discard(task)
+
+    async def admitted_connect(reader, writer, peer):
         now = time.monotonic()
         while rates and next(iter(rates.values()))[-1] <= now - 60:
             rates.popitem(last=False)
         attempts = [t for t in rates.get(peer[0] if peer else '', []) if t > now - 60]
-        if not peer or len(active) >= 8 or len(attempts) >= 30 or (peer[0] not in rates and len(rates) >= 4096):
+        if not peer or len(attempts) >= 30 or (peer[0] not in rates and len(rates) >= 4096):
             writer.close()
             return
         rates[peer[0]] = attempts + [now]
         rates.move_to_end(peer[0])
-        task = asyncio.current_task()
-        active.add(task)
-        try:
-            await Session(config, reader, writer, log).run()
-        finally:
-            active.discard(task)
+        await Session(config, reader, writer, log, peer=peer).run()
     server = await asyncio.start_server(connect, config.listen_host, config.listen_port, limit=32768)
     log(event='listening', listen_port=config.listen_port, buffer_ms=config.buffer_ms,
-        max_buffer_bytes=config.max_buffer_bytes)
+        max_buffer_bytes=config.max_buffer_bytes, write_timeout_seconds=config.write_timeout,
+        write_max_wait_seconds=config.write_max_wait)
     async with server:
         await server.serve_forever()
 
@@ -500,21 +609,37 @@ def main():
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--listen-port', type=int)
     parser.add_argument('--buffer-ms', type=int)
-    parser.add_argument('--max-buffer-bytes', type=int, default=2 * 1024 * 1024)
-    parser.add_argument('--write-timeout', type=float, default=2)
+    parser.add_argument('--max-buffer-bytes', type=int)
+    parser.add_argument('--write-timeout', type=float, help='seconds without transport write progress')
+    parser.add_argument('--write-max-wait', type=float, help='maximum seconds for a single drain')
     args = parser.parse_args()
     settings = json.loads((args.runtime / 'settings.json').read_text())
+    from .config import buffer_limits
+    overrides = {key: value for key, value in (
+        ('rtsp_max_buffer_bytes', args.max_buffer_bytes),
+        ('rtsp_write_timeout_seconds', args.write_timeout),
+        ('rtsp_write_max_wait_seconds', args.write_max_wait)) if value is not None}
+    try:
+        limits = buffer_limits(dict(settings, **overrides))
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.max_buffer_bytes = limits['rtsp_max_buffer_bytes']
+    args.write_timeout = limits['rtsp_write_timeout_seconds']
+    args.write_max_wait = limits['rtsp_write_max_wait_seconds']
     args.listen_port = args.listen_port or settings['rtsp_port']
     args.buffer_ms = args.buffer_ms or settings.get('rtsp_buffer_ms', 1000)
     if not 1 <= args.listen_port <= 65535 or not 100 <= args.buffer_ms <= 3000:
         parser.error('port or buffer outside allowed range')
-    if not 65536 <= args.max_buffer_bytes <= 16 * 1024 * 1024 or not 0.1 <= args.write_timeout <= 10:
-        parser.error('queue limit or write timeout outside allowed range')
     args.listen_host = (settings['bind_address'] if settings['mode'] == 'production' or settings.get('local_network')
                         else '127.0.0.1')
+    args.proxy_protocol = settings.get('reverse_proxy_enabled', False)
+    args.public_port = settings.get('public_rtsp_port', 554) if args.proxy_protocol else args.listen_port
     args.upstream_host = '127.0.0.1'
     args.upstream_port = settings.get('rtsp_internal_port', 18554)
-    args.public_hosts = {settings['hostname'], args.listen_host}
+    args.public_hosts = {settings.get('read_hostname', settings['hostname']), args.listen_host}
+    if args.proxy_protocol:
+        args.listen_host = '127.0.0.1'
+        args.public_hosts = {settings.get('read_hostname', settings['hostname'])}
     args.proxy_secret = load_secret(args.runtime / 'rtspbuffer/proxy-secret')
     args.test_channel = None
     if settings.get('test_video_enabled'):

@@ -20,7 +20,7 @@ for name in ('README.md','PROJECT_PLAN.md','setup.sh','streamctl','requirements.
     files.extend(p for p in candidates if p.is_file() and not p.is_symlink() and
                  '__pycache__' not in p.parts and p.suffix not in ('.pyc','.key','.crt','.pem','.csr','.log')
                  and (p.relative_to(root).parts[0] != 'config' or p.name.endswith('.example.json')
-                      or p.name in ('version.json', 'mediamtx.base.yml'))
+                      or p.name in ('version.json', 'mediamtx.base.yml', 'nginx-media.conf'))
                  and not p.name.endswith('-credentials.json'))
 files.sort()
 manifest=''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+str(p.relative_to(root))+'\n' for p in files).encode()

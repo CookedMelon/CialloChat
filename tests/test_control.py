@@ -17,7 +17,7 @@ from streamctl.controladmin import Administration
 from streamctl.controlclient import call
 from streamctl.controlprotocol import encode, load_config, receive, sign_request, verify_request
 from streamctl.controlserver import ControlServer
-from streamctl.leases import send_account_notice
+from streamctl.leases import send_account_notice, send_notice
 
 PASSWORD = 'a-long-control-password-at-least-32-characters'
 SID = '12345678-1234-1234-1234-123456789abc'
@@ -134,6 +134,86 @@ class ControlOperations(unittest.TestCase):
         self.assertNotEqual(final['push_password'], pushed['push_password'])
         self.assertNotEqual(final['pull_password'], pushed['pull_password'])
         self.assertEqual(self.send.call_count, 4)
+
+    def test_refresh_time_preserves_credentials_active_session_and_metering(self):
+        before = self.add(); accounts_before = self.store.read('accounts.json'); now = time.time()
+        hashed = accounts_before['users'][0]['publish_key_hash']
+        self.assertTrue(self.admin.leases.admit('alice', hashed, hashed, SID, now))
+        item = dict(id=SID,state='publish'); policy = {'alice':hashed}
+        self.admin.leases.invalid_sessions([item],policy,now=now,meter_now=now)
+        self.admin.leases.invalid_sessions([item],policy,now=now+6600,meter_now=now+6600)
+        with patch('streamctl.leases.time.monotonic',return_value=now+6600):
+            notice = self.admin.leases.prepare_notice('alice',hashed,now+6600)
+        self.admin.leases.delivered(notice)
+        with patch('streamctl.leases.time.time',return_value=now+6601), \
+                patch('streamctl.leases.time.monotonic',return_value=now+6601), \
+                patch('streamctl.controladmin.commit') as commit:
+            result = self.admin.command(['refresh','alice','time'])
+            after = self.admin.command(['list'])['users'][0]
+            commit.assert_not_called()
+        self.assertEqual(result['email_status'],'sent')
+        self.assertEqual(after['push_password'],before['push_password'])
+        self.assertEqual(after['pull_password'],before['pull_password'])
+        self.assertEqual(after['push_seconds_remaining'],7200)
+        self.assertEqual(self.store.read('accounts.json'),accounts_before)
+        self.assertEqual(self.send.call_args.kwargs['reason'],'time')
+        with self.admin.leases.connection() as db:
+            self.assertIsNotNone(db.execute('SELECT * FROM sessions WHERE id=?',(SID,)).fetchone())
+            self.assertIsNone(db.execute('SELECT pending_hash FROM leases').fetchone()[0])
+        self.assertEqual(self.admin.leases.invalid_sessions([item],policy,now=now+6611,meter_now=now+6611),[])
+        with patch('streamctl.leases.time.monotonic',return_value=now+6611):
+            self.assertEqual(self.admin.leases.statuses()[0]['remaining_seconds'],7190)
+        self.assertFalse(self.admin.leases.admit('alice',hashed,notice['hash'],'old-pending',now+6611))
+
+    def test_refresh_time_restores_expired_key_or_preserves_current_renewal_key(self):
+        before=self.add(); hashed=self.store.read('accounts.json')['users'][0]['publish_key_hash']
+        for delivered in (False,True):
+            with self.subTest(delivered=delivered):
+                now=time.time()
+                self.admin.leases.admit('alice',hashed,hashed,SID,now)
+                self.admin.leases.invalid_sessions([dict(id=SID,state='publish')],{'alice':hashed},now=now,meter_now=now)
+                self.admin.leases.invalid_sessions([dict(id=SID,state='publish')],{'alice':hashed},now=now+6600,meter_now=now+6600)
+                with patch('streamctl.leases.time.monotonic',return_value=now+6600):
+                    notice=self.admin.leases.prepare_notice('alice',hashed,now+6600)
+                if delivered:self.admin.leases.delivered(notice)
+                self.admin.leases.invalid_sessions([dict(id=SID,state='publish')],{'alice':hashed},now=now+7200,meter_now=now+7200)
+                with patch('streamctl.leases.time.monotonic',return_value=now+7200):
+                    self.admin.command(['refresh','alice','time'])
+                    current=self.admin.command(['list'])['users'][0]
+                expected=notice['key'] if delivered else before['push_password']
+                self.assertEqual(current['push_password'],expected)
+                self.assertEqual(current['pull_password'],before['pull_password'])
+                self.assertEqual(current['push_seconds_remaining'],7200)
+                self.assertTrue(self.admin.leases.admit('alice',hashed,notice['hash'] if delivered else hashed,SID))
+
+    def test_refresh_time_mail_retry_is_durable_and_passwords_stay_fixed(self):
+        before=self.add()
+        self.send.side_effect=OSError('offline')
+        result=self.admin.command(['refresh','alice','time'])
+        self.assertEqual(result['email_status'],'queued')
+        self.send.side_effect=None
+        with self.admin.leases.connection() as db:db.execute('UPDATE mail_outbox SET retry_at=0')
+        Administration(self.tmp.name).retry_notifications()
+        after=self.admin.command(['list'])['users'][0]
+        self.assertEqual((after['push_password'],after['pull_password']),
+                         (before['push_password'],before['pull_password']))
+        self.assertEqual(self.send.call_args.kwargs['reason'],'time')
+
+    def test_manual_and_automatic_notices_explain_the_trigger_before_username(self):
+        config=self.admin.mail_config()
+        for reason,text in [('manual','密码已被管理员更新。'),
+                            ('automatic','当前密钥接近使用上限，自动刷新。'),
+                            ('time','推流密钥使用时长已被管理员重置为两小时。')]:
+            with self.subTest(reason=reason), patch('streamctl.leases.send_message') as send:
+                if reason=='automatic':
+                    send_notice(config,dict(username='cc',key='new-push-key',read_key='pull-key',hash='id'),
+                                'rtmps://chat.v50to.cc:1936','rtsp://chat.v50to.cc:8554')
+                else:
+                    send_account_notice(config,'cc','push-key','pull-key','rtmps://chat.v50to.cc:1936',
+                                        'rtsp://chat.v50to.cc:8554','CialloChat密码刷新','id',reason=reason)
+                body=send.call_args.args[1].get_content()
+                self.assertEqual(body.splitlines()[:3],['CialloChat密码刷新',text,'用户名：cc'])
+                self.assertIn('OBS推流URL：',body); self.assertIn('播放器输入URL：',body)
 
     def test_list_tracks_automatic_renewal_after_expiry_and_manual_promotion(self):
         before = self.add(); now = time.time()

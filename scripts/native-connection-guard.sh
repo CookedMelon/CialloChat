@@ -13,9 +13,15 @@ for firewall in iptables ip6tables; do
     --hashlimit-burst 8 --hashlimit-mode srcip --hashlimit-name ciallochat-new \
     --hashlimit-htable-max 4096 --hashlimit-htable-expire 60000 -j RETURN
   "$firewall" -w -A CIALLOCHAT_NEW -j DROP
-  if ! "$firewall" -w -C INPUT -p tcp -m multiport --dports "$publish_port,$read_port" \
-      -m conntrack --ctstate NEW -j CIALLOCHAT_NEW 2>/dev/null; then
-    "$firewall" -w -I INPUT 1 -p tcp -m multiport --dports "$publish_port,$read_port" \
-      -m conntrack --ctstate NEW -j CIALLOCHAT_NEW
-  fi
+  # Remove only our own old jumps when the public ports change. Otherwise an
+  # old 1936/8554 rule rate-limits every backend connection as the same proxy IP.
+  mapfile -t input_rules < <("$firewall" -w -S INPUT)
+  for line in "${input_rules[@]}"; do
+    read -r -a rule <<< "$line"
+    if [[ "${rule[0]}" == '-A' && "${rule[-1]}" == CIALLOCHAT_NEW ]]; then
+      "$firewall" -w -D "${rule[@]:1}"
+    fi
+  done
+  "$firewall" -w -I INPUT 1 ! -i lo -p tcp -m multiport --dports "$publish_port,$read_port" \
+    -m conntrack --ctstate NEW -j CIALLOCHAT_NEW
 done

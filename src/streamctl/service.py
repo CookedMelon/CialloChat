@@ -141,10 +141,15 @@ class Service:
         ca = self.store.path / "certs/ca.crt"
         context = ssl.create_default_context(cafile=str(ca) if ca.exists() else None)
         address = "127.0.0.1" if self.settings["bind_address"] in ("0.0.0.0", "::") else self.settings["bind_address"]
+        if self.settings.get('reverse_proxy_enabled'):
+            address = '127.0.0.1'
         deadline = time.monotonic() + 10
         while True:
             try:
                 with socket.create_connection((address, self.settings["rtmps_port"]), timeout=3) as sock:
+                    if self.settings.get('reverse_proxy_enabled'):
+                        source, port = sock.getsockname()
+                        sock.sendall(f'PROXY TCP4 {source} 127.0.0.1 {port} {self.settings["rtmps_port"]}\r\n'.encode())
                     with context.wrap_socket(sock, server_hostname=self.settings["hostname"]) as tls:
                         if tls.getpeercert(binary_form=True) != expected:
                             raise ValueError("运行服务未使用新证书")
